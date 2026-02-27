@@ -209,6 +209,7 @@ class ScheduleRepository(BaseRepository):
                 tg = result.scalar_one_or_none()
                 if tg:
                     tg.is_tracked = is_tracked
+                    session.commit()
         await asyncio.to_thread(_sync_set)
 
     async def get_predicted_schedule(self, group_name: str, target_date: date) -> List[Lesson]:

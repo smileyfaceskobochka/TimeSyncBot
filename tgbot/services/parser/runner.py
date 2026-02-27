@@ -3,13 +3,14 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
+
 from tgbot.config import config
 from tgbot.database.repositories import DatabaseManager, UserRepository
 from tgbot.services.parser.site_to_pdf import main_downloader
 from tgbot.services.parser.pdf_parser import parse_schedule_files
 from tgbot.services.parser.occupancy_parser import update_occupancy
 from tgbot.services.parser.progress import ProgressReporter
-from tgbot.config import config
 
 async def run_pipeline(db_manager: DatabaseManager = None, group_keywords: list[str] = None, progress=None):
     if not progress:

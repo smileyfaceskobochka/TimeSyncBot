@@ -4,6 +4,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
 from tgbot.config import config
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton
@@ -80,7 +81,7 @@ async def show_main_menu(
 ):
     """Универсальная функция для показа главного меню"""
     await state.clear()
-    
+
     if user and user.group_name:
 
         text = f"Главное меню\nГруппа: {user.group_name}"
@@ -89,17 +90,25 @@ async def show_main_menu(
         if isinstance(target, Message):
             await target.answer(text, reply_markup=reply_markup)
         else:  # CallbackQuery
-            await target.message.edit_text(text, reply_markup=reply_markup)
+            try:
+                await target.message.edit_text(text, reply_markup=reply_markup)
+            except TelegramBadRequest as e:
+                if "message is not modified" not in str(e):
+                    raise
             await target.answer()
     else:
         text = "👋 Привет! Я умный бот, помогающий жизни студентам и кураторам ВятГУ.\n\nВведите название вашей группы (например: <b>ИВТб-1201-01-00</b> или просто <b>ИВТб</b>):"
-        
+
         if isinstance(target, Message):
             await target.answer(text)
         else:  # CallbackQuery
-            await target.message.edit_text(text)
+            try:
+                await target.message.edit_text(text)
+            except TelegramBadRequest as e:
+                if "message is not modified" not in str(e):
+                    raise
             await target.answer()
-        
+
         await state.set_state(RegState.search_group)
 
 
@@ -139,8 +148,16 @@ async def cmd_help(message: Message):
 @user_router.callback_query(F.data == "cmd_help")
 async def callback_cmd_help(callback: CallbackQuery, user_repo: UserRepository):
     user = await user_repo.get_user(callback.from_user.id)
-    await callback.message.edit_text(HELP_TEXT, reply_markup=get_main_menu(user, {}))
-    await callback.answer()
+    try:
+        await callback.message.edit_text(HELP_TEXT, reply_markup=get_main_menu(user, {}))
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            # Message already shows the help text, just acknowledge the click
+            await callback.answer("ℹ️ Это справка о возможностях бота")
+        else:
+            raise
+    else:
+        await callback.answer()
 
 # ================= ОБРАБОТЧИК КНОПКИ "Главное меню" =================
 @user_router.callback_query(F.data == "cmd_start")
@@ -157,9 +174,13 @@ async def callback_cmd_start(
 # ================= ПОИСК И СМЕНА ГРУППЫ =================
 @user_router.callback_query(F.data == "search_start")
 async def search_start(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
-        "🔎 Введите название группы для поиска (например: <b>ИВТб</b> или <b>ЮРб</b>):"
-    )
+    try:
+        await callback.message.edit_text(
+            "🔎 Введите название группы для поиска (например: <b>ИВТб</b> или <b>ЮРб</b>):"
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
     await state.set_state(RegState.search_group)
 
 
