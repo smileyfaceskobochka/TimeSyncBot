@@ -1,0 +1,55 @@
+services:
+  timesyncbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: timesyncbot
+    restart: unless-stopped
+    
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      ADMIN_IDS: ${ADMIN_IDS}
+      DATA_DIR: /app/data
+      DB_DIR: /app/data
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Europe/Moscow}
+    
+    volumes:
+      # Persist data between restarts
+      - timesyncbot_data:/app/data
+      - timesyncbot_logs:/app/logs
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Signal handling
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+
+volumes:
+  timesyncbot_data:
+    driver: local
+  timesyncbot_logs:
+    driver: local
