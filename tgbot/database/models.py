@@ -25,7 +25,7 @@ class User(SQLModel, table=True):
         try:
             data = json.loads(self.settings_json)
             return UserSettings(**data)
-        except:
+        except (json.JSONDecodeError, ValueError, TypeError):
             return UserSettings()
 
     @settings.setter
@@ -36,7 +36,7 @@ class User(SQLModel, table=True):
     def favorites(self) -> List[str]:
         try:
             return json.loads(self.favorites_json)
-        except:
+        except (json.JSONDecodeError, ValueError, TypeError):
             return []
 
     @favorites.setter

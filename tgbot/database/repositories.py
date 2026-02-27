@@ -288,8 +288,10 @@ class OccupancyRepository(BaseRepository):
                 statement = select(Occupancy.building).distinct()
                 result = session.execute(statement)
                 buildings = list(result.scalars().all())
-                try: return sorted(buildings, key=lambda x: int(x) if x.isdigit() else 999)
-                except: return sorted(buildings)
+                try:
+                    return sorted(buildings, key=lambda x: int(x) if x.isdigit() else 999)
+                except (ValueError, TypeError):
+                    return sorted(buildings)
         return await asyncio.to_thread(_sync_get)
 
     async def add_occupancy_batch(self, occupancies: List[Occupancy]):

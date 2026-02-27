@@ -12,8 +12,19 @@ from datetime import datetime
 from tgbot.services.parser.occupancy_parser import update_occupancy
 from tgbot.database.repositories import DatabaseManager
 from tgbot.config import config
+import asyncio
 
 admin_parser_router = Router()
+
+# Store running parser tasks for tracking
+_parser_tasks = []
+
+
+def _cleanup_tasks():
+    """Remove completed tasks from tracking"""
+    global _parser_tasks
+    _parser_tasks = [task for task in _parser_tasks if not task.done()]
+
 
 
 @admin_parser_router.message(Command("parser_status"))
@@ -170,11 +181,12 @@ async def cmd_parser_logs(message: Message):
         except ValueError:
             pass
     
-    # Читаем лог-файл (путь нужно настроить под вашу систему)
+    # Читаем лог-файл
     import os
-    log_path = "logs/bot.log"  # Измените на ваш путь
-    
-    if not os.path.exists(log_path):
+    from pathlib import Path
+    log_path = Path(config.LOG_DIR) / "bot.log"
+
+    if not log_path.exists():
         await message.answer(
             "❌ Лог-файл не найден.\n\n"
             f"Ожидаемый путь: <code>{log_path}</code>"
