@@ -200,6 +200,14 @@ async def process_group_search(
     fast_results = await schedule_repo.search_tracked_groups(message.text.strip())
     
     if not results and not fast_results:
+        # Проверяем, не связано ли это с недоступностью сайта
+        from tgbot.services.parser.site_to_pdf import check_website_status
+        is_available, status_code, error_msg = await check_website_status()
+        if not is_available:
+            return await message.answer(
+                f"🌐 Сайт ВятГУ временно недоступен ({error_msg}).\n"
+                "Поиск групп сейчас невозможен. Попробуйте позже."
+            )
         return await message.answer(
             "⚠️ Группы не найдены. Попробуйте ввести название точнее (например: ИВТб)."
         )

@@ -26,6 +26,29 @@ HEADERS = {
 }
 OUTPUT_DIR = Path(config.DATA_DIR) / "pdf"
 
+
+async def check_website_status(url: str = None, timeout: int = 10) -> tuple:
+    """
+    Проверяет доступность сайта ВятГУ.
+    Returns: (is_available: bool, status_code: int, error: str | None)
+    """
+    if url is None:
+        url = SCHEDULE_URL
+    try:
+        async with aiohttp.ClientSession(headers=HEADERS) as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                if resp.status == 200:
+                    return (True, resp.status, None)
+                else:
+                    return (False, resp.status, f"HTTP {resp.status}")
+    except asyncio.TimeoutError:
+        return (False, 0, "Таймаут соединения")
+    except aiohttp.ClientConnectorError as e:
+        return (False, 0, f"Ошибка подключения: {e}")
+    except Exception as e:
+        return (False, 0, f"Неизвестная ошибка: {e}")
+
+
 def calculate_hash(content: bytes) -> str:
     return hashlib.md5(content).hexdigest()
 
@@ -86,11 +109,20 @@ async def sync_groups_list(engine=None, progress=None):
     
     if engine is None:
         engine = create_engine(f"sqlite:///{config.DB_NAME}")
-        
+
+    # Проверяем доступность сайта
+    is_available, status_code, error_msg = await check_website_status()
+    if not is_available:
+        logging.warning(f"🌐 Сайт ВятГУ недоступен: {error_msg}")
+        if progress:
+            await progress.report(f"🌐 Сайт ВятГУ недоступен: {error_msg}", 1.0)
+        return False
+
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
             async with session.get(SCHEDULE_URL) as resp:
                 if resp.status != 200:
+                    logging.warning(f"🌐 Сайт ВятГУ вернул HTTP {resp.status}")
                     return False
                 text = await resp.text()
         
@@ -172,7 +204,15 @@ async def main_downloader(db_manager: DatabaseManager = None, group_keywords: Li
         return []
     
     logging.info(f"🎯 Fetching PDFs for {len(tracked_groups_list)} groups...")
-    
+
+    # Проверяем доступность сайта
+    is_available, status_code, error_msg = await check_website_status()
+    if not is_available:
+        logging.warning(f"🌐 Сайт ВятГУ недоступен при загрузке PDF: {error_msg}")
+        if progress:
+            await progress.report(f"🌐 Сайт ВятГУ недоступен: {error_msg}", 1.0)
+        return []
+
     async with aiohttp.ClientSession(headers=HEADERS) as http_session:
         async with http_session.get(SCHEDULE_URL) as resp:
             if resp.status != 200: return []

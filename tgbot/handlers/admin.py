@@ -47,5 +47,14 @@ async def admin_sync_groups(callback: CallbackQuery):
     if success:
         await callback.message.edit_text("✅ Список групп успешно обновлен!", reply_markup=get_admin_menu_kb())
     else:
-        await callback.message.edit_text("❌ Ошибка при синхронизации.", reply_markup=get_admin_menu_kb())
+        from tgbot.services.parser.site_to_pdf import check_website_status
+        is_available, status_code, error_msg = await check_website_status()
+        if not is_available:
+            await callback.message.edit_text(
+                f"🌐 Сайт ВятГУ недоступен ({error_msg}).\n"
+                "Синхронизация невозможна. Попробуйте позже.",
+                reply_markup=get_admin_menu_kb()
+            )
+        else:
+            await callback.message.edit_text("❌ Ошибка при синхронизации.", reply_markup=get_admin_menu_kb())
     await callback.answer()

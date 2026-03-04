@@ -74,7 +74,12 @@ async def main():
     if tracked_count == 0:
         logging.info("🚀 First run detected. Syncing university groups list...")
         from tgbot.services.parser.site_to_pdf import sync_groups_list
-        await sync_groups_list(db_manager.engine)
+        sync_ok = await sync_groups_list(db_manager.engine)
+        if not sync_ok:
+            logging.warning(
+                "⚠️ VyatSU website is currently unreachable. "
+                "Bot will start with cached data. Group search will be limited."
+            )
 
     schedule_service = ScheduleService()
     occupancy_service = OccupancyService(occupancy_repo)
