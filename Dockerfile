@@ -28,9 +28,9 @@ COPY . .
 # Create data directories
 RUN mkdir -p /app/data/pdf /app/data/temp /app/logs
 
-# Health check
+# Health check (verify python process is running)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD pgrep -f "python main.py" || exit 1
 
 # Entrypoint
 ENTRYPOINT ["/app/docker/entrypoint.sh"]

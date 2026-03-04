@@ -14,13 +14,12 @@ from sqlalchemy.orm import Session
 
 from tgbot.config import config
 from tgbot.database.models import Occupancy, ProcessedFile
+from tgbot.services.parser.site_to_pdf import check_website_status
 
-# Constants
-INDEX_URL = "https://www.vyatsu.ru/studentu-1/spravochnaya-informatsiya/zanyatost-auditoriy.html"
-BASE_URL = "https://www.vyatsu.ru/"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-}
+# Constants (centralized in config)
+INDEX_URL = config.OCCUPANCY_URL
+BASE_URL = config.VYATSU_BASE_URL
+HEADERS = config.HTTP_HEADERS
 
 # Maps pair number to time interval identifier from the HTML
 PAIR_INTERVALS = {
@@ -182,6 +181,12 @@ async def update_occupancy(engine=None):
     if engine is None:
         engine = create_engine(f"sqlite:///{config.DB_NAME}")
     
+    # Check website availability first
+    is_available, status_code, error_msg = await check_website_status(INDEX_URL)
+    if not is_available:
+        logging.warning(f"🌐 Сайт ВятГУ недоступен при обновлении занятости: {error_msg}")
+        return
+
     # 1. Fetch the index page to get all report links
     async with aiohttp.ClientSession(headers=HEADERS) as http:
         try:

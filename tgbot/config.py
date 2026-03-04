@@ -50,4 +50,12 @@ class Settings(BaseSettings):
         "18:55": 7, "18:55-20:25": 7
     }
 
+    # ===== VyatSU website constants (centralized) =====
+    VYATSU_BASE_URL: str = "https://www.vyatsu.ru/"
+    SCHEDULE_URL: str = "https://www.vyatsu.ru/studentu-1/spravochnaya-informatsiya/raspisanie-zanyatiy-dlya-studentov.html"
+    OCCUPANCY_URL: str = "https://www.vyatsu.ru/studentu-1/spravochnaya-informatsiya/zanyatost-auditoriy.html"
+    HTTP_HEADERS: dict = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+
 config = Settings()

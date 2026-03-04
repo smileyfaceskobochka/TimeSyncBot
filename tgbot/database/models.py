@@ -83,6 +83,8 @@ class Occupancy(SQLModel, table=True):
     pair_number: int = Field()
     start_time: Optional[str] = None
     end_time: Optional[str] = None
+    is_free: bool = Field(default=True)
+    group_name: Optional[str] = None
 
 class ActionLog(SQLModel, table=True):
     __tablename__ = "action_logs"

@@ -15,7 +15,16 @@ class DatabaseManager:
     def __init__(self, db_path: str):
         self.db_path = db_path
         # Use synchronous engine to avoid greenlet dependency on Python 3.14
+        from sqlalchemy import event
         self.engine = create_engine(f"sqlite:///{db_path}")
+        
+        @event.listens_for(self.engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.close()
+            
         self.session_factory = sessionmaker(
             self.engine, expire_on_commit=False, class_=Session
         )

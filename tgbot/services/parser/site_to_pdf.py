@@ -18,12 +18,10 @@ from tgbot.services.parser.progress import ProgressReporter
 from tgbot.database.models import TrackedGroup, ProcessedFile
 from tgbot.database.repositories import DatabaseManager
 
-# Константы
-SCHEDULE_URL = "https://www.vyatsu.ru/studentu-1/spravochnaya-informatsiya/raspisanie-zanyatiy-dlya-studentov.html"
-BASE_URL = "https://www.vyatsu.ru/"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-}
+# Константы (centralized in config)
+SCHEDULE_URL = config.SCHEDULE_URL
+BASE_URL = config.VYATSU_BASE_URL
+HEADERS = config.HTTP_HEADERS
 OUTPUT_DIR = Path(config.DATA_DIR) / "pdf"
 
 

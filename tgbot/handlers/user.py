@@ -19,8 +19,9 @@ from tgbot.services.parser.runner import run_pipeline
 from tgbot.services.services import ScheduleService
 from tgbot.services.utils import parse_date
 from tgbot.states.states import RegState, FavState
-from tgbot.keyboards.inline import get_main_menu, get_group_selection_kb
+from tgbot.keyboards.inline import get_main_menu, get_group_selection_kb, get_schedule_hub_kb
 from tgbot.keyboards.callback_data import GroupSelectCb
+from tgbot.services.rate_limiter import parser_rate_limiter
 
 user_router = Router()
 
@@ -304,6 +305,16 @@ async def confirm_multi_parse(
     if not selected_groups:
         return await callback.answer("⚠️ Выберите хотя бы одну группу!", show_alert=True)
     
+    # 1. Check rate limit
+    is_allowed, remaining = parser_rate_limiter.check_limit(callback.from_user.id)
+    if not is_allowed:
+        minutes = remaining // 60
+        seconds = remaining % 60
+        return await callback.answer(
+            f"⏳ Пожалуйста, подождите {minutes} мин {seconds} сек перед следующим запросом расписания.", 
+            show_alert=True
+        )
+
     # 1. Помечаем группы как отслеживаемые
     for group_name in selected_groups:
         await schedule_repo.set_group_tracked(group_name, is_tracked=True)
@@ -343,6 +354,8 @@ async def confirm_multi_parse(
         bot_settings = await user_repo.get_settings()
         await callback.message.edit_text(text, reply_markup=get_main_menu(user, bot_settings))
 
+        parser_rate_limiter.record_usage(callback.from_user.id)
+
     except Exception as e:
         logging.error(f"Error in multi-group parsing: {e}")
         await callback.message.edit_text(f"❌ Произошла ошибка при загрузке: {e}")
@@ -360,6 +373,16 @@ async def parse_group_ondemand(
     # мы можем либо сразу его запустить, либо перевести в режим выбора.
     # Для простоты - запустим сразу.
     
+    # Check rate limit
+    is_allowed, remaining = parser_rate_limiter.check_limit(callback.from_user.id)
+    if not is_allowed:
+        minutes = remaining // 60
+        seconds = remaining % 60
+        return await callback.answer(
+            f"⏳ Пожалуйста, подождите {minutes} мин {seconds} сек перед следующим запросом расписания.", 
+            show_alert=True
+        )
+        
     group_name = callback_data.name
     await schedule_repo.set_group_tracked(group_name, is_tracked=True)
     
@@ -387,6 +410,8 @@ async def parse_group_ondemand(
             f"✅ Расписание для группы <b>{group_name}</b> успешно загружено и установлено!",
             reply_markup=get_schedule_hub_kb(group_name)
         )
+        parser_rate_limiter.record_usage(callback.from_user.id)
+        
     except Exception as e:
         logging.error(f"Error in on-demand parsing: {e}")
         await callback.message.edit_text(f"❌ Произошла ошибка при загрузке: {e}")

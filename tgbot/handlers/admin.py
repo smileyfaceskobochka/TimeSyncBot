@@ -1,11 +1,18 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
-from aiogram.filters import Command
+from aiogram.filters import Command, BaseFilter
 from tgbot.database.repositories import UserRepository
 from tgbot.keyboards.inline import get_admin_menu_kb, get_bot_settings_kb
 from tgbot.keyboards.callback_data import AdminCallback
+from tgbot.config import config
+
+class AdminFilter(BaseFilter):
+    async def __call__(self, obj: Message | CallbackQuery) -> bool:
+        return obj.from_user.id in config.ADMIN_IDS
 
 admin_router = Router()
+admin_router.message.filter(AdminFilter())
+admin_router.callback_query.filter(AdminFilter())
 
 @admin_router.message(Command("admin"))
 async def admin_start(message: Message):

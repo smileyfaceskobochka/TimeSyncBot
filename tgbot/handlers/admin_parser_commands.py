@@ -5,7 +5,7 @@
 """
 
 from aiogram import Router, F
-from aiogram.filters import Command
+from aiogram.filters import Command, BaseFilter
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from datetime import datetime
@@ -14,7 +14,13 @@ from tgbot.database.repositories import DatabaseManager
 from tgbot.config import config
 import asyncio
 
+class AdminFilter(BaseFilter):
+    async def __call__(self, obj: Message | CallbackQuery) -> bool:
+        return obj.from_user.id in config.ADMIN_IDS
+
 admin_parser_router = Router()
+admin_parser_router.message.filter(AdminFilter())
+admin_parser_router.callback_query.filter(AdminFilter())
 
 # Store running parser tasks for tracking
 _parser_tasks = []
