@@ -3,8 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        PIP_UNINSTALL_OPENCV: "1"
     container_name: timesyncbot
     restart: unless-stopped
     

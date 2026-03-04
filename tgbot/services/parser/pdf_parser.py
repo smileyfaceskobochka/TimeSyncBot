@@ -4,8 +4,8 @@ from datetime import datetime
 import re
 from typing import List, Tuple
 
+import pdfplumber
 import pandas as pd
-import camelot
 from sqlalchemy import delete, create_engine
 from sqlalchemy.orm import Session
 
@@ -21,19 +21,26 @@ def process_pdf_sync(file_path, group_name):
     data_list = []
     
     try:
-        tables = camelot.read_pdf(str(file_path), flavor='lattice', pages='all', line_scale=40, split_text=True, suppress_stdout=True)
+        with pdfplumber.open(str(file_path)) as pdf:
+            tables = []
+            for page in pdf.pages:
+                page_tables = page.extract_tables()
+                if page_tables:
+                    tables.extend(page_tables)
     except Exception as e:
         logging.error(f"Error reading PDF {file_path}: {e}")
         return []
 
-    if not tables: return []
+    if not tables: 
+        return []
 
-    df_full = pd.concat([tbl.df for tbl in tables], ignore_index=True)
+    df_full = pd.concat([pd.DataFrame(table[1:], columns=table[0]) for table in tables], ignore_index=True)
     
     for col in df_full.columns:
         df_full[col] = df_full[col].astype(str).replace({r'\n': ' ', r'\r': ''}, regex=True).str.strip()
     
-    if len(df_full.columns) < 3: return []
+    if len(df_full.columns) < 3: 
+        return []
 
     df_full['lesson_info_full'] = df_full.iloc[:, 2:].agg(' '.join, axis=1).str.strip()
     
@@ -45,12 +52,17 @@ def process_pdf_sync(file_path, group_name):
         time_text = row.get(1, "").strip()
         lesson_text = row.get('lesson_info_full', "").strip()
 
-        if day_text: current_day = day_text
-        if time_text and "интервал" not in time_text.lower(): current_time = time_text
+        if day_text: 
+            current_day = day_text
+        if time_text and "интервал" not in time_text.lower(): 
+            current_time = time_text
         
-        if not current_day and not current_time and not lesson_text: continue
-        if not lesson_text: continue
-        if "день" in current_day.lower() and "интервал" in current_time.lower(): continue
+        if not current_day and not current_time and not lesson_text: 
+            continue
+        if not lesson_text: 
+            continue
+        if "день" in current_day.lower() and "интервал" in current_time.lower(): 
+            continue
 
         date_iso = None
         date_match = re.search(r'(\d{2})\.(\d{2})\.(\d{2})', current_day)
@@ -96,7 +108,8 @@ def _sync_save_lessons(engine, lessons):
         session.commit()
 
 async def save_lessons_to_db(lessons: List[Lesson], engine=None):
-    if not lessons: return
+    if not lessons: 
+        return
     
     if engine is None:
         engine = create_engine(f"sqlite:///{config.DB_NAME}")
@@ -113,7 +126,8 @@ async def parse_schedule_files(files_to_parse: List[Tuple[str, str]], progress=N
     
     total = len(files_to_parse)
     for i, (f_path, g_name) in enumerate(files_to_parse):
-        if progress: await progress.report(f"📄 Parsing {g_name}...", (i / total if total > 0 else 0))
+        if progress: 
+            await progress.report(f"📄 Parsing {g_name}...", (i / total if total > 0 else 0))
         
         lessons = await asyncio.to_thread(process_pdf_sync, f_path, g_name)
         if lessons:
