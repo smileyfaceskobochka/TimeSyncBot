@@ -4,7 +4,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from tgbot.database.models import User, UserSettings
 from tgbot.config import config
-from tgbot.keyboards.callback_data import GroupSelectCb, ScheduleNav, SettingCb, AdminCallback, FreeRoomsDate,MeetingCb
+from tgbot.keyboards.callback_data import GroupSelectCb, ScheduleNav, SettingCb, AdminCallback, FreeRoomsDate, MeetingCb, TeacherNav
 def is_admin(user_id: int) -> bool: return user_id in config.ADMIN_IDS
 def get_week_calendar_kb(group: str, base_date: date = None) -> InlineKeyboardMarkup:
     if base_date is None:
@@ -116,6 +116,7 @@ def get_main_menu(user: User, bot_settings: dict = None) -> InlineKeyboardMarkup
         buttons.append([InlineKeyboardButton(text="🔍 Свободные аудитории", callback_data="free_rooms_start")])
     
     buttons.append([InlineKeyboardButton(text="🤝 Общие окна (Встречи)", callback_data="meet_start")])
+    buttons.append([InlineKeyboardButton(text="🎓 Поиск преподавателя", callback_data=TeacherNav(action="start").pack())])
     
     row2 = []
     if bot_settings.get('btn_favorites', '1') == '1':
@@ -244,13 +245,39 @@ def get_pair_selection_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_building_selection_kb(buildings: List[str]) -> InlineKeyboardMarkup:
-    buttons = [[InlineKeyboardButton(text=f"🏢 Корпус {b}", callback_data=f"building_{b}")] for b in buildings]
-    buttons.append([InlineKeyboardButton(text="« Назад", callback_data="free_rooms_start")])
+    # Sort buildings: numbers first, then text
+    try:
+        sorted_b = sorted(buildings, key=lambda x: int(x) if x.isdigit() else 999)
+    except:
+        sorted_b = sorted(buildings)
+        
+    buttons = [[InlineKeyboardButton(text=f"🏢 Корпус {b}", callback_data=f"building_{b}")] for b in sorted_b]
+    buttons.append([InlineKeyboardButton(text="« Назад", callback_data="cmd_start")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_available_pairs_kb(available_pairs: List[int]) -> InlineKeyboardMarkup:
+    STANDARD_PAIRS = {
+        1: "08:20", 2: "10:00", 3: "11:45", 
+        4: "14:00", 5: "15:45", 6: "17:20", 7: "18:55"
+    }
+    builder = InlineKeyboardBuilder()
+    # Always check 1-7
+    for p in range(1, 8):
+        if p in available_pairs:
+            time_start = STANDARD_PAIRS.get(p, "??:??")
+            builder.button(text=f"{p} пара ({time_start})", callback_data=f"pair_{p}")
+    
+    if not available_pairs:
+        builder.button(text="❌ Нет свободных пар", callback_data="noop")
+        
+    builder.adjust(1)
+    builder.row(InlineKeyboardButton(text="« Назад", callback_data="free_rooms_start"))
+    return builder.as_markup()
 
 def get_admin_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Синхронизировать список групп", callback_data="admin_sync_groups")],
+        [InlineKeyboardButton(text="🏢 Обновить занятость", callback_data="admin_sync_occupancy")],
         [InlineKeyboardButton(text="⚙️ Настройки бота", callback_data=AdminCallback(action="sett").pack())],
         [InlineKeyboardButton(text="« Меню", callback_data="cmd_start")]
     ])
@@ -287,3 +314,35 @@ def get_bot_settings_kb(settings: dict) -> InlineKeyboardMarkup:
 
 def get_cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_panel")]])
+def get_teacher_institutes_kb(institutes: List[dict]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for idx, inst in enumerate(institutes):
+        builder.button(
+            text=inst["name"],
+            callback_data=TeacherNav(action="select_inst", target=str(idx)).pack()
+        )
+    builder.adjust(1)
+    builder.row(InlineKeyboardButton(text="« Назад", callback_data="cmd_start"))
+    return builder.as_markup()
+
+def get_teacher_faculties_kb(faculties: List[dict], inst_idx: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for idx, fac in enumerate(faculties):
+        builder.button(
+            text=fac["name"],
+            callback_data=TeacherNav(action="select_fac", target=str(idx), inst=str(inst_idx)).pack()
+        )
+    builder.adjust(1)
+    builder.row(InlineKeyboardButton(text="« Назад", callback_data=TeacherNav(action="start").pack()))
+    return builder.as_markup()
+
+def get_teacher_departments_kb(departments: List[dict], inst_idx: int, fac_idx: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for idx, dept in enumerate(departments):
+        builder.button(
+            text=dept["name"],
+            callback_data=TeacherNav(action="select_dept", target=str(idx), inst=str(inst_idx), fac=str(fac_idx)).pack()
+        )
+    builder.adjust(1)
+    builder.row(InlineKeyboardButton(text="« Назад", callback_data=TeacherNav(action="select_inst", target=str(inst_idx)).pack()))
+    return builder.as_markup()

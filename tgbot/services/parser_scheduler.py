@@ -106,6 +106,16 @@ class ParserSchedulerService:
         except Exception as e:
             logging.error(f"❌ Ошибка при ежедневной синхронизации: {e}", exc_info=True)
 
+    async def run_occupancy_sync(self):
+        """Запускает синхронизацию занятости аудиторий"""
+        logging.info("🏢 Запуск плановой синхронизации занятости аудиторий...")
+        try:
+            from tgbot.services.parser.occupancy_parser import update_occupancy
+            await update_occupancy(self.db_manager.engine)
+            logging.info("✅ Синхронизация занятости завершена успешно.")
+        except Exception as e:
+            logging.error(f"❌ Ошибка при синхронизации занятости: {e}", exc_info=True)
+
     def start(self, interval_hours: int = 12):
         """
         Запускает планировщик парсера.
@@ -149,11 +159,20 @@ class ParserSchedulerService:
             id="maintenance_job"
         )
         
+        # Синхронизация занятости аудиторий (каждые 4 часа)
+        self.scheduler.add_job(
+            self.run_occupancy_sync,
+            "interval",
+            hours=4,
+            id="occupancy_sync_job"
+        )
+        
         self.scheduler.start()
         logging.info(f"⚙️ Планировщик парсера запущен")
         logging.info(f"   📅 Job 1: Парсинг расписания - каждый день в 6:50 AM")
         logging.info(f"   📡 Job 2: Синхронизация с веб-сайтом - каждый день в 5:00 AM")
-        logging.info(f"   🧹 Job 3: Плановое обслуживание - каждое воскресенье в 4:00 AM")
+        logging.info(f"   🏢 Job 3: Синхронизация занятости - каждые 4 часа")
+        logging.info(f"   🧹 Job 4: Плановое обслуживание - каждое воскресенье в 4:00 AM")
         
         # Запуск парсера сразу при старте (если включено)
         if self.run_on_startup:

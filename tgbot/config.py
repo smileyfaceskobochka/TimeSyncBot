@@ -1,29 +1,29 @@
 import os
 from pathlib import Path
 from typing import List
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", 
         env_file_encoding='utf-8', 
-        extra='ignore'  # Ignore extra env vars like ADMIN_IDS, TZ
+        extra='ignore'  # Ignore extra env vars TZ
     )
     
     BOT_TOKEN: str
-    # Note: ADMIN_IDS is NOT a pydantic field to avoid env variable parsing issues
-    # It's handled separately - see properties below
+    
+    admin_ids_raw: str = Field(default="", alias="ADMIN_IDS")
     
     @property
     def ADMIN_IDS(self) -> List[int]:
         """Parse ADMIN_IDS from environment variable - comma-separated integers"""
-        admin_ids_str = os.getenv('ADMIN_IDS', '')
-        if not admin_ids_str:
+        if not self.admin_ids_raw:
             return []
         try:
-            return [int(x.strip()) for x in admin_ids_str.split(',') if x.strip()]
+            return [int(x.strip()) for x in self.admin_ids_raw.split(',') if x.strip()]
         except ValueError as e:
-            raise ValueError(f"Invalid ADMIN_IDS format. Expected comma-separated integers, got: {admin_ids_str}") from e
+            raise ValueError(f"Invalid ADMIN_IDS format. Expected comma-separated integers, got: {self.admin_ids_raw}") from e
     
     # Path configurations (environment-driven)
     DATA_DIR: str = os.getenv("DATA_DIR", "./data")

@@ -65,3 +65,20 @@ async def admin_sync_groups(callback: CallbackQuery):
         else:
             await callback.message.edit_text("❌ Ошибка при синхронизации.", reply_markup=get_admin_menu_kb())
     await callback.answer()
+
+@admin_router.callback_query(F.data == "admin_sync_occupancy")
+async def admin_sync_occupancy(callback: CallbackQuery):
+    from tgbot.services.parser.occupancy_parser import update_occupancy
+    from tgbot.services.parser.progress import ProgressReporter
+    from sqlalchemy import create_engine
+    
+    progress = ProgressReporter(callback.message)
+    await progress.report("⏳ Начало обновления занятости...", 0.0)
+    
+    engine = create_engine(f"sqlite:///{config.DB_NAME}")
+    try:
+        await update_occupancy(engine=engine, progress=progress)
+        await callback.message.edit_text("✅ Занятость аудиторий успешно обновлена!", reply_markup=get_admin_menu_kb())
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Ошибка при обновлении занятости: {e}", reply_markup=get_admin_menu_kb())
+    await callback.answer()

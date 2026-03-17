@@ -60,12 +60,23 @@ def parse_html_table(html: bytes, building: str) -> List[Occupancy]:
         # Build col_index -> room_name mapping (skip first 2: "День" and "Интервал")
         col_to_room = {}
         for col_idx, cell in enumerate(header_cells):
+            if col_idx < 2: continue  # Skip "День" and "Интервал"
+            
             text = cell.get_text(strip=True)
-            # Room names match pattern like "2-100", "3-204а", "2-100_" (suffix variant)
-            if re.match(r'^\d+-\d+[а-яА-Я_]*$', text):
+            if not text:
+                continue
+                
+            # 1. Standard dash format "1-101" or "Гл-Зал"
+            if '-' in text and len(text) > 2:
                 # Normalize: strip trailing underscores (variant rooms)
                 room_clean = text.rstrip('_')
                 col_to_room[col_idx] = room_clean
+            # 2. Pure number "101" or "101а"
+            elif re.match(r'^\d+[а-яА-Я]?$', text):
+                col_to_room[col_idx] = f"{building}-{text}"
+            # 3. Special case for Building 18 (placeholders: _, __, ., —)
+            elif text in ('_', '__', '.', '—', '---'):
+                col_to_room[col_idx] = f"{building}-{text}"
         
         if not col_to_room:
             logging.warning(f"  No room headers found for building {building}")
@@ -171,12 +182,13 @@ def _sync_process_report(engine, building: str, report_url: str, new_hash: str, 
         return True
 
 
-async def update_occupancy(engine=None):
+async def update_occupancy(engine=None, progress=None):
     """
     Fetches the occupancy index page, finds all report links grouped by building,
     downloads the most recent report for each building, and stores parsed data in DB.
     """
     logging.info("🏢 Updating room occupancy data...")
+    if progress: await progress.report("🏢 Начало обновления занятости аудиторий...", 0.0)
     
     if engine is None:
         engine = create_engine(f"sqlite:///{config.DB_NAME}")
@@ -185,6 +197,7 @@ async def update_occupancy(engine=None):
     is_available, status_code, error_msg = await check_website_status(INDEX_URL)
     if not is_available:
         logging.warning(f"🌐 Сайт ВятГУ недоступен при обновлении занятости: {error_msg}")
+        if progress: await progress.report(f"🌐 Сайт ВятГУ недоступен: {error_msg}", 1.0)
         return
 
     # 1. Fetch the index page to get all report links
@@ -193,10 +206,12 @@ async def update_occupancy(engine=None):
             async with http.get(INDEX_URL, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 if resp.status != 200:
                     logging.error(f"  Failed to fetch index page: HTTP {resp.status}")
+                    if progress: await progress.report(f"❌ Ошибка HTTP {resp.status}", 1.0)
                     return
                 html_index = await resp.text(encoding='utf-8', errors='replace')
         except Exception as e:
             logging.error(f"  Error fetching occupancy index: {e}")
+            if progress: await progress.report(f"❌ Ошибка: {e}", 1.0)
             return
         
         soup = BeautifulSoup(html_index, 'html.parser')
@@ -207,6 +222,7 @@ async def update_occupancy(engine=None):
         
         if not all_links:
             logging.warning("  No occupancy report links found on index page!")
+            if progress: await progress.report("⚠️ Ссылки не найдены", 1.0)
             return
         
         # Group links by building number (first digit in filename)
@@ -247,14 +263,22 @@ async def update_occupancy(engine=None):
                 if len(parts) >= 2:
                     building_links[parts[0]].append((date.min, urljoin(BASE_URL, href)))
         
-        logging.info(f"  Found reports for buildings: {sorted(building_links.keys())}")
+        sorted_buildings = sorted(building_links.keys())
+        total_buildings = len(sorted_buildings)
+        logging.info(f"  Found reports for buildings: {sorted_buildings}")
         
+        if progress: await progress.report(f"🏢 Найдено корпусов: {total_buildings}", 0.1)
+
         # 2. For each building, process reports covering current period
-        for building_num, reports in sorted(building_links.items()):
+        for idx, building_num in enumerate(sorted_buildings):
+            reports = building_links[building_num]
             # Sort by start date, most recent first  
             reports.sort(key=lambda x: x[0], reverse=True)
             
-            for start_date, report_url in reports[:3]:  # Process up to 3 most recent per building
+            p_val = 0.1 + (idx / total_buildings) * 0.85
+            if progress: await progress.report(f"🏢 Обработка корпуса {building_num} ({idx+1}/{total_buildings})...", p_val)
+
+            for start_date, report_url in reports[:2]:  # Process up to 2 most recent per building
                 try:
                     async with http.get(report_url, timeout=aiohttp.ClientTimeout(total=30)) as r:
                         if r.status != 200:

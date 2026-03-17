@@ -26,3 +26,9 @@ class MenuCallback(CallbackData, prefix="menu"):
 class FreeRoomsDate(CallbackData, prefix="fr_date"):
     action: str
     date: str = ""
+
+class TeacherNav(CallbackData, prefix="teach"):
+    action: str
+    target: str = "" # name or index
+    fac: str = ""    # parent faculty
+    inst: str = ""   # parent institute

@@ -76,7 +76,7 @@ class ScheduleService:
 
         header = f"📅 <b>{date_obj.strftime('%d.%m.%Y')}</b> ({group_name})"
         if is_predicted:
-            header += "\n🔮 <i>Предполагаемое расписание (на основе прошлых недель)</i>"
+            header += "\n🔮 <i>Предполагаемое расписание (не официальное!)</i>"
 
         if not lessons:
             return f"{header}\n\n🎉 Пар нет!"
@@ -173,3 +173,6 @@ class OccupancyService:
             target_date, pair_number, building
         )
         return all_rooms - occupied
+
+    async def get_available_pairs(self, target_date: date, building: str) -> List[int]:
+        return await self.occupancy_repo.get_available_pairs(target_date, building)

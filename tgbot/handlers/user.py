@@ -201,17 +201,28 @@ async def process_group_search(
     fast_results = await schedule_repo.search_tracked_groups(message.text.strip())
     
     if not results and not fast_results:
-        # Проверяем, не связано ли это с недоступностью сайта
-        from tgbot.services.parser.site_to_pdf import check_website_status
-        is_available, status_code, error_msg = await check_website_status()
-        if not is_available:
+        # Auto-recovery: If DB is empty because startup sync failed, try to sync now
+        tracked_count = await schedule_repo.get_tracked_groups_count()
+        if tracked_count == 0:
+            from tgbot.services.parser.site_to_pdf import sync_groups_list
+            sync_msg = await message.answer("🔄 Загрузка списка групп с сайта ВятГУ, пожалуйста, подождите...")
+            sync_ok = await sync_groups_list() # Uses default config.DB_NAME 
+            await sync_msg.delete()
+            if sync_ok:
+                fast_results = await schedule_repo.search_tracked_groups(message.text.strip())
+                
+        if not results and not fast_results:
+            # Проверяем, не связано ли это с недоступностью сайта
+            from tgbot.services.parser.site_to_pdf import check_website_status
+            is_available, status_code, error_msg = await check_website_status()
+            if not is_available:
+                return await message.answer(
+                    f"🌐 Сайт ВятГУ временно недоступен ({error_msg}).\n"
+                    "Поиск групп сейчас невозможен. Попробуйте позже."
+                )
             return await message.answer(
-                f"🌐 Сайт ВятГУ временно недоступен ({error_msg}).\n"
-                "Поиск групп сейчас невозможен. Попробуйте позже."
+                "⚠️ Группы не найдены. Попробуйте ввести название точнее (например: ИВТб)."
             )
-        return await message.answer(
-            "⚠️ Группы не найдены. Попробуйте ввести название точнее (например: ИВТб)."
-        )
     
     if fast_results and not results:
         # Save results for toggles

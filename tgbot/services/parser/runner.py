@@ -12,9 +12,14 @@ from tgbot.services.parser.pdf_parser import parse_schedule_files
 from tgbot.services.parser.occupancy_parser import update_occupancy
 from tgbot.services.parser.progress import ProgressReporter
 
+class ConsoleProgress:
+    async def report(self, text: str, progress: float = None):
+        p_str = f" [{int(progress*100)}%]" if progress is not None else ""
+        logging.info(f"📊 {text}{p_str}")
+
 async def run_pipeline(db_manager: DatabaseManager = None, group_keywords: list[str] = None, progress=None):
     if not progress:
-        progress = ProgressReporter()
+        progress = ConsoleProgress()
         
     logging.info(f"🚀 Starting Pipeline... {'[Batch: ' + str(group_keywords) + ']' if group_keywords else ''}")
     
@@ -25,6 +30,11 @@ async def run_pipeline(db_manager: DatabaseManager = None, group_keywords: list[
     user_repo = UserRepository(db_manager)
     await user_repo.create_tables()
     
+    # 1.5. Синхронизация списка групп с сайтом ВятГУ (обновляем общий список)
+    from tgbot.services.parser.site_to_pdf import sync_groups_list
+    await progress.report("🔄 Updating university groups list...", 0.05)
+    await sync_groups_list(engine=db_manager.engine, progress=progress)
+
     # 2. Скачивание PDF
     await progress.report("📥 Downloading schedules...", 0.1)
     new_files = await main_downloader(db_manager=db_manager, group_keywords=group_keywords, progress=progress) 

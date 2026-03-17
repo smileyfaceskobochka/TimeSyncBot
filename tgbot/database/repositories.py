@@ -31,6 +31,20 @@ class DatabaseManager:
 
     def create_db_and_tables(self):
         SQLModel.metadata.create_all(self.engine)
+        # Migration: ensure all columns exist in occupancy table
+        with self.engine.connect() as conn:
+            result = conn.execute(text("PRAGMA table_info(occupancy)"))
+            columns = [row[1] for row in result.fetchall()]
+            
+            if "is_free" not in columns:
+                logging.info("Migrating: Adding is_free column to occupancy table")
+                conn.execute(text("ALTER TABLE occupancy ADD COLUMN is_free BOOLEAN DEFAULT 1"))
+            
+            if "group_name" not in columns:
+                logging.info("Migrating: Adding group_name column to occupancy table")
+                conn.execute(text("ALTER TABLE occupancy ADD COLUMN group_name VARCHAR"))
+            
+            conn.commit()
 
     def get_session(self) -> Session:
         return self.session_factory()
@@ -222,24 +236,64 @@ class ScheduleRepository(BaseRepository):
         await asyncio.to_thread(_sync_set)
 
     async def get_predicted_schedule(self, group_name: str, target_date: date) -> List[Lesson]:
-        weekday = target_date.weekday()
         def _sync_predict():
+            # VyatSU usually has a 2-week cycle (14 days)
+            # We look for lessons on the same day of the week, 
+            # prioritizing those that match the 14-day phase (Numerator/Denominator)
             with self.db_manager.get_session() as session:
+                # Find all lessons for this group on this weekday in the past 28 days
+                weekday = target_date.weekday()
                 raw_query = text("""
-                    SELECT pair_number, subject, class_type, teacher, building, room, subgroup, COUNT(*) as frequency
+                    SELECT pair_number, subject, class_type, teacher, building, room, subgroup, date
                     FROM lesson
-                    WHERE group_name = :group_name AND (strftime('%w', date) + 6) % 7 = :weekday
-                    GROUP BY pair_number, subject, teacher
-                    ORDER BY pair_number, frequency DESC
+                    WHERE group_name = :group_name AND 
+                          (strftime('%w', date) + 6) % 7 = :weekday
+                    ORDER BY date DESC
                 """)
-                result = session.execute(raw_query, {"group_name": group_name, "weekday": weekday})
+                result = session.execute(raw_query, {
+                    "group_name": group_name, 
+                    "weekday": weekday
+                })
                 rows = result.fetchall()
                 
+                if not rows:
+                    return []
+                
+                # Group by phase (date mod 14)
+                # We need a reference date. Let's use the first date in the DB for this group as reference.
+                ref_stmt = select(Lesson.date).where(Lesson.group_name == group_name).order_by(Lesson.date).limit(1)
+                ref_date_str = session.execute(ref_stmt).scalar()
+                if not ref_date_str: return []
+                ref_date = date.fromisoformat(ref_date_str)
+                
+                target_phase = (target_date - ref_date).days % 14
+                
                 predicted = {}
+                # First pass: try exact phase match (most accurate for 2-week cycle)
+                for row in rows:
+                    row_date = date.fromisoformat(row.date)
+                    row_phase = (row_date - ref_date).days % 14
+                    
+                    if row_phase == target_phase:
+                        p_num = row.pair_number
+                        if p_num not in predicted:
+                            predicted[p_num] = Lesson(
+                                group_name=group_name,
+                                date=target_date.isoformat(),
+                                pair_number=p_num,
+                                subject=row.subject,
+                                class_type=row.class_type,
+                                teacher=row.teacher,
+                                building=row.building,
+                                room=row.room,
+                                subgroup=row.subgroup
+                            )
+                
+                # Second pass: fill gaps with any weekday match if phase match failed
                 for row in rows:
                     p_num = row.pair_number
                     if p_num not in predicted:
-                        predicted[p_num] = Lesson(
+                         predicted[p_num] = Lesson(
                             group_name=group_name,
                             date=target_date.isoformat(),
                             pair_number=p_num,
@@ -250,6 +304,7 @@ class ScheduleRepository(BaseRepository):
                             room=row.room,
                             subgroup=row.subgroup
                         )
+                
                 return sorted(predicted.values(), key=lambda x: x.pair_number)
         return await asyncio.to_thread(_sync_predict)
 
@@ -271,7 +326,8 @@ class OccupancyRepository(BaseRepository):
             with self.db_manager.get_session() as session:
                 statement = select(Occupancy).where(
                     Occupancy.date == target_date.isoformat(),
-                    Occupancy.pair_number == pair_number
+                    Occupancy.pair_number == pair_number,
+                    Occupancy.is_free == False
                 )
                 if building: statement = statement.where(Occupancy.building == building)
                 result = session.execute(statement)
@@ -296,11 +352,24 @@ class OccupancyRepository(BaseRepository):
             with self.db_manager.get_session() as session:
                 statement = select(Occupancy.building).distinct()
                 result = session.execute(statement)
-                buildings = list(result.scalars().all())
+                buildings = [b for b in result.scalars().all() if b]
                 try:
                     return sorted(buildings, key=lambda x: int(x) if x.isdigit() else 999)
                 except (ValueError, TypeError):
                     return sorted(buildings)
+        return await asyncio.to_thread(_sync_get)
+
+    async def get_available_pairs(self, target_date: date, building: str) -> List[int]:
+        def _sync_get():
+            with self.db_manager.get_session() as session:
+                # A pair is available if there is at least one free room in that building/date
+                statement = select(Occupancy.pair_number).where(
+                    Occupancy.date == target_date.isoformat(),
+                    Occupancy.building == building,
+                    Occupancy.is_free == True
+                ).distinct().order_by(Occupancy.pair_number)
+                result = session.execute(statement)
+                return list(result.scalars().all())
         return await asyncio.to_thread(_sync_get)
 
     async def add_occupancy_batch(self, occupancies: List[Occupancy]):

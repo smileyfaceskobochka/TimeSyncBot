@@ -24,6 +24,9 @@ BASE_URL = config.VYATSU_BASE_URL
 HEADERS = config.HTTP_HEADERS
 OUTPUT_DIR = Path(config.DATA_DIR) / "pdf"
 
+MAX_CONCURRENT_DOWNLOADS = 5
+DOWNLOAD_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+
 
 async def check_website_status(url: str = None, timeout: int = 10) -> tuple:
     """
@@ -69,26 +72,38 @@ async def download_pdf_if_needed(session: aiohttp.ClientSession, url: str, group
     group_dir.mkdir(parents=True, exist_ok=True)
     file_path = group_dir / filename
 
-    try:
-        async with session.get(url, timeout=30) as resp:
-            if resp.status != 200:
-                return None
-            content = await resp.read()
-            new_hash = calculate_hash(content)
-            
-            skip, hash_to_return = await asyncio.to_thread(_sync_check_hash, session_factory, filename, new_hash, file_path)
-            
-            if skip:
-                return (str(file_path), safe_group, filename, None)
+    max_retries = 3
+    async with DOWNLOAD_SEMAPHORE:
+        for attempt in range(max_retries):
+            try:
+                async with session.get(url, timeout=45) as resp:
+                    if resp.status != 200:
+                        logging.warning(f"⚠️ Failed to download {url}: HTTP {resp.status}")
+                        if resp.status in [429, 503, 504] and attempt < max_retries - 1:
+                            await asyncio.sleep(2 ** attempt)
+                            continue
+                        return None
+                    
+                    content = await resp.read()
+                    new_hash = calculate_hash(content)
+                    
+                    skip, hash_to_return = await asyncio.to_thread(_sync_check_hash, session_factory, filename, new_hash, file_path)
+                    
+                    if skip:
+                        return (str(file_path), safe_group, filename, None)
 
-            # Сохраняем файл
-            async with aiofiles.open(file_path, 'wb') as f:
-                await f.write(content)
-            
-            return (str(file_path), safe_group, filename, hash_to_return)
-    except Exception as e:
-        logging.error(f"Error downloading {url}: {e}")
-        return None
+                    # Сохраняем файл
+                    async with aiofiles.open(file_path, 'wb') as f:
+                        await f.write(content)
+                    
+                    return (str(file_path), safe_group, filename, hash_to_return)
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logging.warning(f"🔄 Retry {attempt+1} for {url} after error: {e}")
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                logging.error(f"❌ Final failure downloading {url}: {e}")
+                return None
 
 def _sync_add_groups(engine, groups_list):
     from sqlalchemy.orm import Session

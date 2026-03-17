@@ -24,6 +24,7 @@ from tgbot.handlers.settings import settings_router
 from tgbot.handlers.free_rooms import free_rooms_router
 from tgbot.handlers.favorites import favorites_router
 from tgbot.handlers.admin import admin_router
+from tgbot.handlers.teacher import teacher_router
 
 # Global reference for signal handler
 parser_scheduler = None
@@ -92,7 +93,8 @@ async def main():
         favorites_router,
         admin_router,
         admin_parser_router,
-        meeting_router
+        meeting_router,
+        teacher_router
     )
 
     parser_scheduler = ParserSchedulerService(
