@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     DB_DIR: str = os.getenv("DB_DIR", "./data")
     LOG_DIR: str = os.getenv("LOG_DIR", "./logs")
     
+    # API server configurations
+    API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
+    API_PORT: int = int(os.getenv("API_PORT", 8000))
+    
     # Database paths
     @property
     def DB_NAME(self) -> str:

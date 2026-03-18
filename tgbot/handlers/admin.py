@@ -18,6 +18,14 @@ admin_router.callback_query.filter(AdminFilter())
 async def admin_start(message: Message):
     await message.answer("👑 <b>Панель администратора</b>", reply_markup=get_admin_menu_kb())
 
+@admin_router.message(Command("stop_bot"))
+async def admin_stop_bot(message: Message):
+    import os
+    import signal
+    await message.answer("🛑 <b>Бот выключается...</b>\nПроцесс на сервере будет остановлен.")
+    # Send SIGTERM to own process to trigger graceful shutdown in main.py
+    os.kill(os.getpid(), signal.SIGTERM)
+
 @admin_router.callback_query(F.data == "admin_panel")
 async def callback_admin_panel(callback: CallbackQuery):
     await callback.message.edit_text("👑 <b>Панель администратора</b>", reply_markup=get_admin_menu_kb())

@@ -109,6 +109,16 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     logging.info("✓ Signal handlers registered")
 
+    # Start Android Widget API Server
+    from aiohttp import web
+    from tgbot.api.server import setup_app
+    api_app = setup_app(db_manager)
+    api_runner = web.AppRunner(api_app)
+    await api_runner.setup()
+    api_site = web.TCPSite(api_runner, config.API_HOST, config.API_PORT)
+    await api_site.start()
+    logging.info(f"🌐 API server started on http://{config.API_HOST}:{config.API_PORT}")
+
     try:
         logging.info("Bot is ready and polling started!")
         await dp.start_polling(
@@ -125,9 +135,10 @@ async def main():
         logging.error(f"❌ Bot error: {e}", exc_info=True)
         raise
     finally:
-        logging.info("Shutting down bot...")
+        logging.info("Shutting down bot and API...")
         if parser_scheduler:
             parser_scheduler.stop()
+        await api_runner.cleanup()
         await bot.session.close()
         logging.info("Bot stopped successfully.")
 
