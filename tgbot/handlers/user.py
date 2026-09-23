@@ -117,7 +117,10 @@ HELP_TEXT = (
     "<b>Возможности бота:</b>\n"
     "• Просмотр расписания на день/неделю\n"
     "• Поиск свободных аудиторий\n"
-    "• Избранные группы\n"
+    "• Поиск преподавателей\n"
+    "• Общие окна (Встречи)\n"
+    "• Избранные группы и преподаватели\n"
+    "• Отзывы и предложения\n"
     "• Настройки отображения\n\n"
     "Техническая поддержка: <a href='https://t.me/VNech3kcs'>@VNech3kcs</a>\n\n"
 )
@@ -173,11 +176,27 @@ async def callback_cmd_start(
 
 
 # ================= ПОИСК И СМЕНА ГРУППЫ =================
+@user_router.message(Command("search"))
+async def cmd_search_start(message: Message, state: FSMContext):
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="« Отмена", callback_data="cmd_start"))
+    await message.answer(
+        "🔎 <b>Поиск расписания группы</b>\n\n"
+        "Введите название или часть названия группы (например: <b>ИВТб-4301</b> или просто <b>ИВТб</b>):",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(RegState.search_group)
+
+
 @user_router.callback_query(F.data == "search_start")
 async def search_start(callback: CallbackQuery, state: FSMContext):
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="« Отмена", callback_data="cmd_start"))
     try:
         await callback.message.edit_text(
-            "🔎 Введите название группы для поиска (например: <b>ИВТб</b> или <b>ЮРб</b>):"
+            "🔎 <b>Поиск расписания группы</b>\n\n"
+            "Введите название или часть названия группы (например: <b>ИВТб-4301</b> или просто <b>ИВТб</b>):",
+            reply_markup=builder.as_markup()
         )
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e):
@@ -224,33 +243,75 @@ async def process_group_search(
                 "⚠️ Группы не найдены. Попробуйте ввести название точнее (например: ИВТб)."
             )
     
-    if fast_results and not results:
-        # Save results for toggles
-        await state.update_data(search_results=fast_results, selected_groups=[])
-        await message.answer(
-            f"🔎 Группа <b>{message.text}</b> найдена в общем списке, но расписание ещё не загружено.\n"
-            "Вы можете выбрать группы для загрузки:",
-            reply_markup=get_group_selection_kb(fast_results, action="parse_ondemand")
-        )
-        return
-
+    # Show all matching groups from university catalogue with pagination
+    groups_to_show = fast_results if fast_results else results
+    await state.update_data(search_results=groups_to_show, search_action="change_group", current_page=1)
     await message.answer(
-        "🔎 Выберите вашу группу из списка:",
-        reply_markup=get_group_selection_kb(results, action="change_group"),
+        f"🔎 Найдено групп: <b>{len(groups_to_show)}</b>. Выберите вашу группу:",
+        reply_markup=get_group_selection_kb(groups_to_show, action="change_group", page=1),
     )
+
+@user_router.callback_query(GroupSelectCb.filter(F.action == "page"))
+async def paginate_groups(
+    callback: CallbackQuery,
+    callback_data: GroupSelectCb,
+    state: FSMContext,
+):
+    """Перелистывание страниц в списке найденных групп"""
+    data = await state.get_data()
+    groups = data.get("search_results", [])
+    if not groups:
+        return await callback.answer("Список устарел. Выполните поиск заново.", show_alert=True)
+    
+    action = data.get("search_action", "change_group")
+    selected_groups = data.get("selected_groups", [])
+    new_page = callback_data.page
+    
+    await state.update_data(current_page=new_page)
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=get_group_selection_kb(
+                groups, 
+                action=action, 
+                selected_groups=selected_groups, 
+                page=new_page
+            )
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+    await callback.answer()
 
 @user_router.callback_query(GroupSelectCb.filter(F.action == "change_group"))
 async def change_group(
     callback: CallbackQuery,
     callback_data: GroupSelectCb,
     user_repo: UserRepository,
+    schedule_repo: ScheduleRepository,
     analytics_repo: AnalyticsRepository,
     state: FSMContext,
 ):
+    group_name = callback_data.name
     await analytics_repo.log_action(
-        callback.from_user.id, "set_group", callback_data.name
+        callback.from_user.id, "set_group", group_name
     )
     
+    # Check if lessons exist for this group. If not, auto-download on demand!
+    has_lessons = await schedule_repo.has_lessons_for_group(group_name)
+    if not has_lessons:
+        await schedule_repo.set_group_tracked(group_name, is_tracked=True)
+        from tgbot.services.parser.progress import ProgressReporter
+        progress = ProgressReporter(callback.message)
+        await progress.report(f"⏳ Расписание для <b>{group_name}</b> загружается с сайта ВятГУ...", 0.1)
+        try:
+            from tgbot.services.parser.runner import run_pipeline
+            from tgbot.database.repositories import DatabaseManager
+            db_manager = DatabaseManager(config.DB_NAME)
+            await run_pipeline(db_manager=db_manager, group_keywords=[group_name], progress=progress)
+        except Exception as e:
+            logging.error(f"Error fetching schedule on-demand for {group_name}: {e}")
+            await callback.message.answer(f"⚠️ Не удалось загрузить расписание: {e}")
+
     user = await user_repo.get_user(callback.from_user.id)
     if not user:
         user = User(
@@ -259,14 +320,26 @@ async def change_group(
             full_name=callback.from_user.full_name,
         )
 
-    user.group_name = callback_data.name
-    await user_repo.upsert_user(user)
+    # If first-time user (no primary group), set it as their primary group
+    if not user.group_name:
+        user.group_name = group_name
+        await user_repo.upsert_user(user)
+
     await state.clear()
 
-    bot_settings = await user_repo.get_settings()
+    # Show schedule for the selected group directly
+    from datetime import date
+    from tgbot.services.services import ScheduleService
+    service = ScheduleService()
+    today = date.today()
+    lessons, is_predicted = await schedule_repo.get_lessons_with_status(group_name, today)
+    settings = user.settings if user else None
+    is_fav = bool(user and group_name in user.favorites)
+    is_my = bool(user and user.group_name == group_name)
+
     await callback.message.edit_text(
-        f"✅ Ваша группа успешно установлена: <b>{callback_data.name}</b>",
-        reply_markup=get_main_menu(user, bot_settings),
+        service.format_day(lessons, today, group_name, settings, is_predicted=is_predicted),
+        reply_markup=get_schedule_hub_kb(group_name, is_favorite=is_fav, is_my_group=is_my),
     )
 
 
@@ -290,13 +363,11 @@ async def toggle_group_for_parsing(
     
     await state.update_data(selected_groups=selected)
     
-    # Обновляем клавиатуру
-    # Нам нужно знать исходный список результатов поиска. 
-    # Сохраним его в стейте при первом поиске.
     results = data.get("search_results", [])
+    current_page = callback_data.page or data.get("current_page", 1)
     
     await callback.message.edit_reply_markup(
-        reply_markup=get_group_selection_kb(results, action="toggle_parse", selected_groups=selected)
+        reply_markup=get_group_selection_kb(results, action="toggle_parse", selected_groups=selected, page=current_page)
     )
     await callback.answer()
 

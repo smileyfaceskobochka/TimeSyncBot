@@ -13,11 +13,12 @@ from tgbot.database.repositories import (
     UserRepository,
     ScheduleRepository,
     OccupancyRepository,
-    AnalyticsRepository
+    AnalyticsRepository,
+    GroupChatRepository
 )
 from tgbot.services.services import ScheduleService, OccupancyService
-from tgbot.services.utils import check_connection
 from tgbot.handlers.meetings import meeting_router
+from tgbot.handlers.group_chat import group_chat_router
 from tgbot.handlers.user import user_router
 from tgbot.handlers.schedule import schedule_router
 from tgbot.handlers.settings import settings_router
@@ -25,6 +26,8 @@ from tgbot.handlers.free_rooms import free_rooms_router
 from tgbot.handlers.favorites import favorites_router
 from tgbot.handlers.admin import admin_router
 from tgbot.handlers.teacher import teacher_router
+from tgbot.handlers.feedback import feedback_router
+from tgbot.handlers.inline_mode import inline_router
 
 # Global reference for signal handler
 parser_scheduler = None
@@ -65,9 +68,11 @@ async def main():
     schedule_repo = ScheduleRepository(db_manager)
     occupancy_repo = OccupancyRepository(db_manager)
     analytics_repo = AnalyticsRepository(analytics_db_manager)
+    group_chat_repo = GroupChatRepository(db_manager)
 
     await user_repo.create_tables()
     await analytics_repo.create_tables()
+    await group_chat_repo.create_tables()
     logging.info("✓ Database tables initialized")
     
     # === STARTUP PROTECTION: ENSURE GROUPS LIST IS POPULATED ===
@@ -86,6 +91,7 @@ async def main():
     occupancy_service = OccupancyService(occupancy_repo)
 
     dp.include_routers(
+        group_chat_router,
         user_router,
         schedule_router,
         settings_router,
@@ -94,13 +100,17 @@ async def main():
         admin_router,
         admin_parser_router,
         meeting_router,
-        teacher_router
+        teacher_router,
+        feedback_router,
+        inline_router
     )
 
     parser_scheduler = ParserSchedulerService(
         db_manager=db_manager,
         schedule_repo=schedule_repo,
-        analytics_repo=analytics_repo
+        analytics_repo=analytics_repo,
+        group_chat_repo=group_chat_repo,
+        bot=bot
     )
     parser_scheduler.start()
     
@@ -119,6 +129,10 @@ async def main():
     await api_site.start()
     logging.info(f"🌐 API server started on http://{config.API_HOST}:{config.API_PORT}")
 
+    # Setup contextual command menus and bot descriptions
+    from tgbot.services.bot_commands import setup_bot_metadata
+    await setup_bot_metadata(bot)
+
     try:
         logging.info("Bot is ready and polling started!")
         await dp.start_polling(
@@ -127,6 +141,7 @@ async def main():
             schedule_repo=schedule_repo,
             occupancy_repo=occupancy_repo,
             analytics_repo=analytics_repo,
+            group_chat_repo=group_chat_repo,
             service=schedule_service,
             parser_scheduler=parser_scheduler,
             occupancy_service=occupancy_service

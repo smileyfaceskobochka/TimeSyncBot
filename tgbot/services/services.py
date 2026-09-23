@@ -19,17 +19,6 @@ class ScheduleService:
         """
         Определяет общие свободные промежутки (пары) для переданного списка групп.
         """
-        # Эталонное время пар ВятГУ
-        STANDARD_PAIRS = {
-            1: "08:20 - 09:50",
-            2: "10:00 - 11:30",
-            3: "11:45 - 13:15",
-            4: "14:00 - 15:30",
-            5: "15:45 - 17:15",
-            6: "17:20 - 18:50",
-            7: "18:55 - 20:25"
-        }
-
         # 1. Получаем все пары для выбранных групп на эту дату
         lessons = await schedule_repo.get_lessons_for_groups(group_names, target_date)
 
@@ -60,7 +49,7 @@ class ScheduleService:
 
         # Сортируем пары по порядку (1, 2, 3...)
         for p in sorted(free_pairs):
-            lines.append(f"▫️ <b>{p} пара</b>: <code>{STANDARD_PAIRS[p]}</code>")
+            lines.append(f"▫️ <b>{p} пара</b>: <code>{config.STANDARD_PAIRS.get(p, '??:?? - ??:??')}</code>")
 
         return "\n".join(lines)
     def format_day(
@@ -107,9 +96,16 @@ class ScheduleService:
                 elif "зачет" in ctype_lower or "экзамен" in ctype_lower:
                     icon = "⚠️"
 
-            start = l.start_time or "??"
-            end = l.end_time or "??"
-            pair_num = l.pair_number if l.pair_number else "?"
+            start = l.start_time
+            end = l.end_time
+            if (not start or not end) and l.pair_number and l.pair_number in config.STANDARD_PAIRS:
+                std_parts = config.STANDARD_PAIRS[l.pair_number].split(" - ")
+                start = start or std_parts[0]
+                end = end or std_parts[1]
+
+            start = start or "??"
+            end = end or "??"
+            pair_num = l.pair_number if l.pair_number else (config.TIME_SLOTS.get(start, "?") if start != "??" else "?")
 
             # --- ИЗМЕНЕН ФОРМАТ ВРЕМЕНИ И ПАРЫ ---
             lines.append(f"\n<b>{pair_num} {icon} {start} - {end}</b>")

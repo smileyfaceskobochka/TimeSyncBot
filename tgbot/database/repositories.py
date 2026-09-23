@@ -2,13 +2,15 @@ import json
 import logging
 import asyncio
 from datetime import date
-from typing import Optional, List, Set, Union, Any
+from typing import Optional, List, Set, Union, Any, Tuple
 
 from sqlalchemy import select, delete, update, func, or_, text, create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, Session
 from sqlmodel import SQLModel, select as sqlmodel_select
 
-from tgbot.database.models import User, Lesson, TrackedGroup, ProcessedFile, BotSetting, UserSettings, Occupancy, ActionLog
+from tgbot.database.models import User, Lesson, TrackedGroup, ProcessedFile, BotSetting, UserSettings, Occupancy, ActionLog, GroupChat
+from tgbot.config import config
 
 
 class DatabaseManager:
@@ -56,7 +58,19 @@ class BaseRepository:
 
 class UserRepository(BaseRepository):
     async def create_tables(self):
-        await asyncio.to_thread(self.db_manager.create_db_and_tables)
+        def _sync_create():
+            self.db_manager.create_db_and_tables()
+            with self.db_manager.get_session() as session:
+                try:
+                    cursor = session.connection().connection.cursor()
+                    cursor.execute("PRAGMA table_info(user);")
+                    columns = [row[1] for row in cursor.fetchall()]
+                    if "favorite_teachers_json" not in columns:
+                        cursor.execute("ALTER TABLE user ADD COLUMN favorite_teachers_json VARCHAR DEFAULT '[]';")
+                    session.connection().connection.commit()
+                except Exception as e:
+                    logging.debug(f"User table migration note: {e}")
+        await asyncio.to_thread(_sync_create)
         await self._init_default_settings()
 
     async def _init_default_settings(self):
@@ -118,16 +132,29 @@ class UserRepository(BaseRepository):
     async def upsert_user(self, user: User):
         def _sync_upsert():
             with self.db_manager.get_session() as session:
-                stmt = select(User).where(User.telegram_id == user.telegram_id)
-                res = session.execute(stmt)
-                exists = res.scalar_one_or_none()
-                if exists:
-                    data = user.model_dump(exclude={"telegram_id"})
+                data = user.model_dump(exclude={"telegram_id"})
+                try:
+                    stmt = select(User).where(User.telegram_id == user.telegram_id)
+                    res = session.execute(stmt)
+                    exists = res.scalar_one_or_none()
+                    if exists:
+                        for key, value in data.items():
+                            setattr(exists, key, value)
+                    else:
+                        session.add(user)
+                    session.commit()
+                except IntegrityError:
+                    # Race: two concurrent upserts for a new user, row appeared
+                    # between SELECT and INSERT. Roll back and update instead.
+                    session.rollback()
+                    exists = session.execute(
+                        select(User).where(User.telegram_id == user.telegram_id)
+                    ).scalar_one_or_none()
+                    if exists is None:
+                        raise
                     for key, value in data.items():
                         setattr(exists, key, value)
-                else:
-                    session.add(user)
-                session.commit()
+                    session.commit()
         await asyncio.to_thread(_sync_upsert)
 
     async def get_user(self, telegram_id: int) -> Optional[User]:
@@ -177,6 +204,12 @@ class ScheduleRepository(BaseRepository):
                 result = session.execute(statement)
                 return list(result.scalars().all())
         return await asyncio.to_thread(_sync_get)
+    async def has_lessons_for_group(self, group_name: str) -> bool:
+        def _sync_check():
+            with self.db_manager.get_session() as session:
+                statement = select(Lesson.id).where(Lesson.group_name == group_name).limit(1)
+                return session.execute(statement).first() is not None
+        return await asyncio.to_thread(_sync_check)
 
     async def search_groups(self, query: str) -> List[str]:
         query_clean = query.strip().lower()
@@ -194,7 +227,7 @@ class ScheduleRepository(BaseRepository):
                     else 1 if x.lower().startswith(query_clean) 
                     else 2
                 ))
-                return matches[:15]
+                return matches[:100]
         return await asyncio.to_thread(_sync_search)
 
     async def search_tracked_groups(self, query: str) -> List[str]:
@@ -213,7 +246,7 @@ class ScheduleRepository(BaseRepository):
                     else 1 if x.lower().startswith(query_clean) 
                     else 2
                 ))
-                return matches[:15]
+                return matches[:100]
         return await asyncio.to_thread(_sync_search)
 
     async def get_tracked_groups_count(self) -> int:
@@ -244,7 +277,7 @@ class ScheduleRepository(BaseRepository):
                 # Find all lessons for this group on this weekday in the past 28 days
                 weekday = target_date.weekday()
                 raw_query = text("""
-                    SELECT pair_number, subject, class_type, teacher, building, room, subgroup, date
+                    SELECT pair_number, subject, class_type, teacher, building, room, subgroup, date, start_time, end_time
                     FROM lesson
                     WHERE group_name = :group_name AND 
                           (strftime('%w', date) + 6) % 7 = :weekday
@@ -268,6 +301,27 @@ class ScheduleRepository(BaseRepository):
                 
                 target_phase = (target_date - ref_date).days % 14
                 
+                def _build_predicted_lesson(row, p_num):
+                    start_t = getattr(row, "start_time", None)
+                    end_t = getattr(row, "end_time", None)
+                    if (not start_t or not end_t) and p_num in config.STANDARD_PAIRS:
+                        std_parts = config.STANDARD_PAIRS[p_num].split(" - ")
+                        start_t = start_t or std_parts[0]
+                        end_t = end_t or std_parts[1]
+                    return Lesson(
+                        group_name=group_name,
+                        date=target_date.isoformat(),
+                        pair_number=p_num,
+                        start_time=start_t,
+                        end_time=end_t,
+                        subject=row.subject,
+                        class_type=row.class_type,
+                        teacher=row.teacher,
+                        building=row.building,
+                        room=row.room,
+                        subgroup=row.subgroup
+                    )
+
                 predicted = {}
                 # First pass: try exact phase match (most accurate for 2-week cycle)
                 for row in rows:
@@ -277,36 +331,98 @@ class ScheduleRepository(BaseRepository):
                     if row_phase == target_phase:
                         p_num = row.pair_number
                         if p_num not in predicted:
-                            predicted[p_num] = Lesson(
-                                group_name=group_name,
-                                date=target_date.isoformat(),
-                                pair_number=p_num,
-                                subject=row.subject,
-                                class_type=row.class_type,
-                                teacher=row.teacher,
-                                building=row.building,
-                                room=row.room,
-                                subgroup=row.subgroup
-                            )
+                            predicted[p_num] = _build_predicted_lesson(row, p_num)
                 
                 # Second pass: fill gaps with any weekday match if phase match failed
                 for row in rows:
                     p_num = row.pair_number
                     if p_num not in predicted:
-                         predicted[p_num] = Lesson(
-                            group_name=group_name,
-                            date=target_date.isoformat(),
-                            pair_number=p_num,
-                            subject=row.subject,
-                            class_type=row.class_type,
-                            teacher=row.teacher,
-                            building=row.building,
-                            room=row.room,
-                            subgroup=row.subgroup
-                        )
+                        predicted[p_num] = _build_predicted_lesson(row, p_num)
                 
                 return sorted(predicted.values(), key=lambda x: x.pair_number)
         return await asyncio.to_thread(_sync_predict)
+
+    async def get_curriculum_date_range(self, group_name: str) -> Tuple[Optional[date], Optional[date]]:
+        """
+        Возвращает (min_start_date, max_end_date) для официально опубликованного расписания группы.
+        Проверяет имена скачанных PDF-файлов (например, *_01092026_13092026.pdf, *_14092026_27092026.pdf)
+        и данные в таблице lesson.
+        """
+        def _sync_get():
+            import re
+            from pathlib import Path
+            from datetime import datetime, timedelta
+            
+            # 1. Проверяем локальные PDF-файлы группы
+            safe_g = group_name.replace('/', '_')
+            pdf_dir = Path(config.DATA_DIR) / "pdf" / safe_g
+            min_pdf_date = None
+            max_pdf_date = None
+            if pdf_dir.exists():
+                for f in pdf_dir.glob("*.pdf"):
+                    m = re.search(r'_(\d{8})_(\d{8})\.pdf$', f.name)
+                    if m:
+                        try:
+                            s = datetime.strptime(m.group(1), "%d%m%Y").date()
+                            e = datetime.strptime(m.group(2), "%d%m%Y").date()
+                            if min_pdf_date is None or s < min_pdf_date:
+                                min_pdf_date = s
+                            if max_pdf_date is None or e > max_pdf_date:
+                                max_pdf_date = e
+                        except ValueError:
+                            pass
+            if min_pdf_date and max_pdf_date:
+                return min_pdf_date, max_pdf_date
+
+            # 2. Если файлов на диске нет, берем диапазон дат из таблицы lesson
+            with self.db_manager.get_session() as session:
+                min_stmt = select(func.min(Lesson.date)).where(Lesson.group_name == group_name)
+                max_stmt = select(func.max(Lesson.date)).where(Lesson.group_name == group_name)
+                min_res = session.execute(min_stmt).scalar()
+                max_res = session.execute(max_stmt).scalar()
+                if min_res and max_res:
+                    min_date = date.fromisoformat(min_res)
+                    # Начало недели (понедельник)
+                    min_date = min_date - timedelta(days=min_date.weekday())
+                    max_date = date.fromisoformat(max_res)
+                    # Конец недели (воскресенье)
+                    max_date = max_date + timedelta(days=(6 - max_date.weekday()))
+                    return min_date, max_date
+            return None, None
+        return await asyncio.to_thread(_sync_get)
+
+    async def get_curriculum_end_date(self, group_name: str) -> Optional[date]:
+        """Возвращает последнюю дату официально опубликованного расписания для группы"""
+        _, end_date = await self.get_curriculum_date_range(group_name)
+        return end_date
+
+    async def get_lessons_with_status(self, group_name: str, target_date: date) -> Tuple[List[Lesson], bool]:
+        """
+        Возвращает (lessons, is_predicted).
+        - Если есть официальные занятия на эту дату: (lessons, False).
+        - Если дата попадает в интервал официального расписания (start_date <= target_date <= end_date),
+          но занятий нет (выходной/окно): ([], False).
+        - Если дата выходит за пределы официального расписания в будущее (target_date > end_date):
+          вызывается get_predicted_schedule(group_name, target_date), возвращается (predicted_lessons, True).
+        - Если дата предшествует началу семестра: ([], False).
+        """
+        lessons = await self.get_lessons(group_name, target_date)
+        if lessons:
+            return lessons, False
+
+        start_date, end_date = await self.get_curriculum_date_range(group_name)
+        if end_date:
+            if target_date <= end_date:
+                # Внутри официального периода расписания (или в прошлом) -> официальный выходной / нет занятий
+                return [], False
+            else:
+                # В будущем за пределами опубликованного расписания -> предполагаемое расписание
+                predicted = await self.get_predicted_schedule(group_name, target_date)
+                return predicted, True
+
+        # Если расписание еще не загружено в базу
+        predicted = await self.get_predicted_schedule(group_name, target_date)
+        return predicted, True if predicted else False
 
     async def cleanup_old_lessons(self, weeks: int = 5):
         """Удаляет старые занятия из базы данных"""
@@ -402,3 +518,81 @@ class AnalyticsRepository(BaseRepository):
                 session.commit()
                 logging.info(f"🧹 Аналитика: Удалены логи старше {cutoff_date}")
         await asyncio.to_thread(_sync_cleanup)
+
+class GroupChatRepository(BaseRepository):
+    async def create_tables(self):
+        def _sync_create():
+            self.db_manager.create_db_and_tables()
+            with self.db_manager.get_session() as session:
+                try:
+                    cursor = session.connection().connection.cursor()
+                    cursor.execute("PRAGMA table_info(group_chats);")
+                    columns = [row[1] for row in cursor.fetchall()]
+                    if "topic_id" not in columns:
+                        cursor.execute("ALTER TABLE group_chats ADD COLUMN topic_id INTEGER DEFAULT NULL;")
+                    if "pin_replies" not in columns:
+                        cursor.execute("ALTER TABLE group_chats ADD COLUMN pin_replies BOOLEAN DEFAULT 0;")
+                    session.connection().connection.commit()
+                except Exception as e:
+                    logging.debug(f"GroupChat table migration note: {e}")
+        await asyncio.to_thread(_sync_create)
+
+    async def get_chat(self, chat_id: int) -> Optional[GroupChat]:
+        def _sync_get():
+            with self.db_manager.get_session() as session:
+                stmt = select(GroupChat).where(GroupChat.chat_id == chat_id)
+                return session.execute(stmt).scalar_one_or_none()
+        return await asyncio.to_thread(_sync_get)
+
+    async def upsert_chat(self, chat: GroupChat):
+        def _sync_upsert():
+            with self.db_manager.get_session() as session:
+                data = chat.model_dump(exclude={"chat_id"})
+                try:
+                    stmt = select(GroupChat).where(GroupChat.chat_id == chat.chat_id)
+                    existing = session.execute(stmt).scalar_one_or_none()
+                    if existing:
+                        for k, v in data.items():
+                            setattr(existing, k, v)
+                        existing.updated_at = date.today().isoformat()
+                    else:
+                        session.add(chat)
+                    session.commit()
+                except IntegrityError:
+                    # Same insert race as upsert_user: retry as update.
+                    session.rollback()
+                    existing = session.execute(
+                        select(GroupChat).where(GroupChat.chat_id == chat.chat_id)
+                    ).scalar_one_or_none()
+                    if existing is None:
+                        raise
+                    for k, v in data.items():
+                        setattr(existing, k, v)
+                    existing.updated_at = date.today().isoformat()
+                    session.commit()
+        await asyncio.to_thread(_sync_upsert)
+
+    async def get_chats_for_time(self, current_time: str) -> List[GroupChat]:
+        def _sync_get():
+            with self.db_manager.get_session() as session:
+                stmt = select(GroupChat).where(
+                    GroupChat.auto_post == True,
+                    GroupChat.post_time == current_time
+                )
+                return list(session.execute(stmt).scalars().all())
+        return await asyncio.to_thread(_sync_get)
+
+    async def get_all_active_chats(self) -> List[GroupChat]:
+        def _sync_get():
+            with self.db_manager.get_session() as session:
+                stmt = select(GroupChat).where(GroupChat.auto_post == True)
+                return list(session.execute(stmt).scalars().all())
+        return await asyncio.to_thread(_sync_get)
+
+    async def delete_chat(self, chat_id: int):
+        def _sync_delete():
+            with self.db_manager.get_session() as session:
+                stmt = delete(GroupChat).where(GroupChat.chat_id == chat_id)
+                session.execute(stmt)
+                session.commit()
+        await asyncio.to_thread(_sync_delete)

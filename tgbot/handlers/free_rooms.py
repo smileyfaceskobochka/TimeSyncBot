@@ -1,6 +1,7 @@
 from datetime import date
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from tgbot.database.repositories import OccupancyRepository, AnalyticsRepository
 from tgbot.services.services import OccupancyService
@@ -15,6 +16,15 @@ from tgbot.keyboards.callback_data import FreeRoomsDate
 from tgbot.states.states import ScheduleState # Using an existing state or creating a specific one
 
 free_rooms_router = Router()
+
+@free_rooms_router.message(Command("free"))
+async def cmd_free_rooms(message: Message, state: FSMContext, occupancy_repo: OccupancyRepository):
+    await state.clear()
+    buildings = await occupancy_repo.get_buildings()
+    await message.answer(
+        "🏢 <b>Выберите корпус:</b>",
+        reply_markup=get_building_selection_kb(buildings)
+    )
 
 @free_rooms_router.callback_query(F.data == "free_rooms_start")
 async def free_rooms_start(callback: CallbackQuery, state: FSMContext, occupancy_repo: OccupancyRepository):

@@ -9,12 +9,13 @@ import hashlib
 
 import aiohttp
 import aiofiles
-from bs4 import BeautifulSoup
+from selectolax.parser import HTMLParser
 from sqlalchemy import select, update, create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
 from tgbot.config import config
 from tgbot.services.parser.progress import ProgressReporter
+from tgbot.services.parser.utils import calculate_hash
 from tgbot.database.models import TrackedGroup, ProcessedFile
 from tgbot.database.repositories import DatabaseManager
 
@@ -48,10 +49,6 @@ async def check_website_status(url: str = None, timeout: int = 10) -> tuple:
         return (False, 0, f"Ошибка подключения: {e}")
     except Exception as e:
         return (False, 0, f"Неизвестная ошибка: {e}")
-
-
-def calculate_hash(content: bytes) -> str:
-    return hashlib.md5(content).hexdigest()
 
 def _sync_check_hash(session_factory, filename, new_hash, file_path):
     with session_factory() as db_session:
@@ -139,9 +136,9 @@ async def sync_groups_list(engine=None, progress=None):
                     return False
                 text = await resp.text()
         
-        soup = BeautifulSoup(text, 'html.parser')
-        group_elements = soup.find_all('div', class_='grpPeriod')
-        groups_list = [g.get_text(strip=True) for g in group_elements]
+        tree = HTMLParser(text)
+        group_elements = tree.css('div.grpPeriod')
+        groups_list = [g.text(strip=True) for g in group_elements]
         
         await asyncio.to_thread(_sync_add_groups, engine, groups_list)
             
@@ -231,27 +228,27 @@ async def main_downloader(db_manager: DatabaseManager = None, group_keywords: Li
             if resp.status != 200: return []
             main_text = await resp.text()
         
-        soup = BeautifulSoup(main_text, 'html.parser')
-        group_elements = soup.find_all('div', class_='grpPeriod')
+        tree = HTMLParser(main_text)
+        group_elements = tree.css('div.grpPeriod')
         tasks = []
         
         for group_div in group_elements:
-            group_name = group_div.get_text(strip=True)
+            group_name = group_div.text(strip=True)
             if group_name not in tracked_groups_list:
                 continue
             
-            period_id = group_div.get('data-grp_period_id')
-            list_div = soup.find('div', id=f"listPeriod_{period_id}")
+            period_id = group_div.attributes.get('data-grp_period_id')
+            list_div = tree.css_first(f"#listPeriod_{period_id}") if period_id else None
             if not list_div: continue
             
-            links = list_div.find_all('a', href=True)
+            links = list_div.css('a[href]')
             for link in links:
-                link_text = link.get_text(strip=True)
+                link_text = link.text(strip=True)
                 if not is_schedule_actual(link_text):
                     logging.info(f"⏩ Skipping outdated schedule: {link_text}")
                     continue
                 
-                href = link['href']
+                href = link.attributes.get('href', '')
                 if href.endswith('.pdf'):
                     full_url = urljoin(BASE_URL, href)
                     tasks.append(download_pdf_if_needed(http_session, full_url, group_name, session_factory))

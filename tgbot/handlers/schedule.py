@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardButton
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
 from tgbot.database.repositories import (
@@ -47,13 +48,45 @@ async def show_my_schedule(
         callback.from_user.id, "view_my_schedule", user.group_name
     )
     
+    is_fav = bool(user and user.group_name in user.favorites)
     try:
         await callback.message.edit_text(
             f"📅 <b>Ваше расписание для {user.group_name}</b>\nВыберите период:",
-            reply_markup=get_schedule_hub_kb(user.group_name),
+            reply_markup=get_schedule_hub_kb(user.group_name, is_favorite=is_fav, is_my_group=True),
         )
     except TelegramBadRequest:
         await callback.answer()
+
+
+@schedule_router.message(Command("schedule"))
+async def cmd_my_schedule(
+    message: Message,
+    user_repo: UserRepository,
+    analytics_repo: AnalyticsRepository,
+    state: FSMContext,
+):
+    from tgbot.states.states import RegState
+
+    await state.clear()
+    user = await user_repo.get_user(message.from_user.id)
+    if not user or not user.group_name:
+        await state.set_state(RegState.search_group)
+        await message.answer(
+            "🔍 <b>Выберите свою группу</b>\n\n"
+            "У вас ещё не установлена группа. Введите название или часть названия группы для поиска:\n\n"
+            "<i>Например: ИВТб-1301 или просто ИВТ</i>"
+        )
+        return
+
+    await analytics_repo.log_action(
+        message.from_user.id, "view_my_schedule", user.group_name
+    )
+    
+    is_fav = bool(user and user.group_name in user.favorites)
+    await message.answer(
+        f"📅 <b>Ваше расписание для {user.group_name}</b>\nВыберите период:",
+        reply_markup=get_schedule_hub_kb(user.group_name, is_favorite=is_fav, is_my_group=True),
+    )
 
 
 async def show_schedule_for_group(
@@ -66,16 +99,13 @@ async def show_schedule_for_group(
 ):
     user = await user_repo.get_user(callback.from_user.id)
     settings = user.settings if user and user.settings else None
-    lessons = await schedule_repo.get_lessons(group_name, target_date)
-    is_predicted = False
-    
-    if not lessons:
-        lessons = await schedule_repo.get_predicted_schedule(group_name, target_date)
-        is_predicted = True if lessons else False
+    lessons, is_predicted = await schedule_repo.get_lessons_with_status(group_name, target_date)
+    is_fav = bool(user and group_name in user.favorites)
+    is_my = bool(user and user.group_name == group_name)
 
     await callback.message.edit_text(
         service.format_day(lessons, target_date, group_name, settings, is_predicted=is_predicted),
-        reply_markup=get_schedule_hub_kb(group_name),
+        reply_markup=get_schedule_hub_kb(group_name, is_favorite=is_fav, is_my_group=is_my),
     )
 
 
@@ -121,19 +151,22 @@ async def navigate_schedule(
         has_any = False
         for i in range(7):
             day_date = start_date + timedelta(days=i)
-            lessons = await schedule_repo.get_lessons(group, day_date)
+            lessons, is_predicted = await schedule_repo.get_lessons_with_status(group, day_date)
             if lessons:
                 has_any = True
-                day_text = service.format_day(lessons, day_date, group, settings)
+                day_text = service.format_day(lessons, day_date, group, settings, is_predicted=is_predicted)
                 text_parts.append(day_text)
 
         if not has_any:
             text_parts.append("🎉 На эту неделю пар нет!")
 
+        is_fav = bool(user and group in user.favorites)
+        is_my = bool(user and user.group_name == group)
+
         try:
             await callback.message.edit_text(
                 text="\n\n".join(text_parts),
-                reply_markup=get_schedule_hub_kb(group)
+                reply_markup=get_schedule_hub_kb(group, is_favorite=is_fav, is_my_group=is_my)
             )
         except TelegramBadRequest as e:
             if "message is not modified" in str(e):
@@ -145,11 +178,7 @@ async def navigate_schedule(
     
     if callback_data.action == "show_date":
         target_date = current
-        lessons = await schedule_repo.get_lessons(group, target_date)
-        is_predicted = False
-        if not lessons:
-            lessons = await schedule_repo.get_predicted_schedule(group, target_date)
-            is_predicted = True if lessons else False
+        lessons, is_predicted = await schedule_repo.get_lessons_with_status(group, target_date)
             
         await analytics_repo.log_action(
             callback.from_user.id,
@@ -157,10 +186,13 @@ async def navigate_schedule(
             f"group:{callback_data.group}, date:{target_date}",
         )
         
+        is_fav = bool(user and group in user.favorites)
+        is_my = bool(user and user.group_name == group)
+
         try:
             await callback.message.edit_text(
                 text=service.format_day(lessons, target_date, group, settings, is_predicted=is_predicted),
-                reply_markup=get_schedule_hub_kb(group)
+                reply_markup=get_schedule_hub_kb(group, is_favorite=is_fav, is_my_group=is_my)
             )
         except TelegramBadRequest as e:
             if "message is not modified" in str(e):
@@ -192,16 +224,14 @@ async def navigate_schedule(
             f"group: {callback_data.group}, date:{new_date}",
         )
 
-    lessons = await schedule_repo.get_lessons(group, new_date)
-    is_predicted = False
-    if not lessons:
-        lessons = await schedule_repo.get_predicted_schedule(group, new_date)
-        is_predicted = True if lessons else False
+    lessons, is_predicted = await schedule_repo.get_lessons_with_status(group, new_date)
+    is_fav = bool(user and group in user.favorites)
+    is_my = bool(user and user.group_name == group)
     
     try:
         await callback.message.edit_text(
             text=service.format_day(lessons, new_date, group, settings, is_predicted=is_predicted),
-            reply_markup=get_schedule_hub_kb(group)
+            reply_markup=get_schedule_hub_kb(group, is_favorite=is_fav, is_my_group=is_my)
         )
     except TelegramBadRequest as e:
         if "message is not modified" in str(e):
@@ -219,7 +249,10 @@ async def process_custom_date(
     chosen_date = parse_date(message.text.strip())
     data = await state.get_data()
     group = data.get("group")
-    kb = get_schedule_hub_kb(group)
+    user = await user_repo.get_user(message.from_user.id)
+    is_fav = bool(user and group in user.favorites)
+    is_my = bool(user and user.group_name == group)
+    kb = get_schedule_hub_kb(group, is_favorite=is_fav, is_my_group=is_my)
 
     if not chosen_date:
         return await message.answer(
@@ -232,11 +265,10 @@ async def process_custom_date(
         chosen_date = chosen_date.replace(year=date.today().year)
 
     await state.clear()
-    user = await user_repo.get_user(message.from_user.id)
-    lessons = await schedule_repo.get_lessons(group, chosen_date)
+    lessons, is_predicted = await schedule_repo.get_lessons_with_status(group, chosen_date)
     settings = user.settings if user else {}
 
     await message.answer(
-        service.format_day(lessons, chosen_date, group, settings),
-        reply_markup=get_schedule_hub_kb(group),
+        service.format_day(lessons, chosen_date, group, settings, is_predicted=is_predicted),
+        reply_markup=get_schedule_hub_kb(group, is_favorite=is_fav, is_my_group=is_my),
     )

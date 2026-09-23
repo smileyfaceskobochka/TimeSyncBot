@@ -7,18 +7,30 @@ from tgbot.services.parser.runner import run_pipeline, cleanup_filesystem
 
 class ParserSchedulerService:
     
-    def __init__(self, db_manager=None, schedule_repo=None, analytics_repo=None, run_on_startup: bool = False):
+    def __init__(
+        self, 
+        db_manager=None, 
+        schedule_repo=None, 
+        analytics_repo=None, 
+        group_chat_repo=None,
+        bot=None,
+        run_on_startup: bool = False
+    ):
         """
         Args:
             db_manager: Database manager instance
             schedule_repo: Schedule repository instance
             analytics_repo: Analytics repository instance
+            group_chat_repo: Group chat repository instance
+            bot: Bot instance for sending scheduled messages
             run_on_startup: Запускать ли парсер сразу при старте бота
         """
         self.scheduler = AsyncIOScheduler()
         self.db_manager = db_manager
         self.schedule_repo = schedule_repo
         self.analytics_repo = analytics_repo
+        self.group_chat_repo = group_chat_repo
+        self.bot = bot
         self.run_on_startup = run_on_startup
         self.last_run = None
         self.last_status = None
@@ -116,6 +128,79 @@ class ParserSchedulerService:
         except Exception as e:
             logging.error(f"❌ Ошибка при синхронизации занятости: {e}", exc_info=True)
 
+    async def run_group_chat_broadcast(self):
+        """Проверяет группы, у которых время рассылки совпадает с текущим, и отправляет расписание"""
+        if not self.bot or not self.group_chat_repo or not self.schedule_repo:
+            return
+            
+        now = datetime.now()
+        current_time_str = now.strftime("%H:%M")
+        
+        try:
+            chats = await self.group_chat_repo.get_chats_for_time(current_time_str)
+        except Exception as e:
+            logging.error(f"Error fetching group chats for time {current_time_str}: {e}")
+            return
+            
+        if not chats:
+            return
+            
+        logging.info(f"📢 Авторассылка: найдено {len(chats)} чат(ов) на {current_time_str}")
+        from tgbot.services.services import ScheduleService
+        service = ScheduleService()
+        
+        for chat in chats:
+            try:
+                target_date = now.date()
+                if chat.post_target == "tomorrow" or (chat.post_time >= "19:00" and chat.post_target != "today"):
+                    from datetime import timedelta
+                    target_date += timedelta(days=1)
+                
+                lessons, is_predicted = await self.schedule_repo.get_lessons_with_status(chat.group_name, target_date)
+                
+                # Если воскресенье и занятий нет — пропускаем, чтобы не спамить в чат
+                if target_date.weekday() == 6 and not lessons:
+                    logging.info(f"⏩ Пропуск рассылки в {chat.chat_id}: воскресенье, пар нет.")
+                    continue
+                    
+                formatted_day = service.format_day(
+                    lessons, 
+                    target_date, 
+                    chat.group_name, 
+                    is_predicted=is_predicted
+                )
+                
+                target_word = "завтра" if target_date > now.date() else "сегодня"
+                msg_text = (
+                    f"🔔 <b>Расписание на {target_word}</b>\n\n"
+                    f"{formatted_day}"
+                )
+                
+                sent_msg = await self.bot.send_message(
+                    chat_id=chat.chat_id,
+                    message_thread_id=chat.topic_id,
+                    text=msg_text
+                )
+                
+                if chat.pin_message:
+                    try:
+                        await self.bot.pin_chat_message(
+                            chat_id=chat.chat_id,
+                            message_id=sent_msg.message_id,
+                            disable_notification=True
+                        )
+                    except Exception as pin_err:
+                        logging.debug(f"Не удалось закрепить сообщение в {chat.chat_id}: {pin_err}")
+                        
+            except Exception as e:
+                err_str = str(e).lower()
+                if "forbidden" in err_str or "chat not found" in err_str or "kicked" in err_str or "deactivated" in err_str:
+                    logging.warning(f"🚫 Бот недоступен в чате {chat.chat_id}. Отключаем авторассылку.")
+                    chat.auto_post = False
+                    await self.group_chat_repo.upsert_chat(chat)
+                else:
+                    logging.error(f"❌ Ошибка отправки расписания в чат {chat.chat_id}: {e}")
+
     def start(self, interval_hours: int = 12):
         """
         Запускает планировщик парсера.
@@ -166,6 +251,15 @@ class ParserSchedulerService:
             hours=4,
             id="occupancy_sync_job"
         )
+
+        # Авторассылка расписания в Telegram-группы (каждую минуту)
+        if self.group_chat_repo and self.bot:
+            self.scheduler.add_job(
+                self.run_group_chat_broadcast,
+                "cron",
+                minute="*",
+                id="group_chat_broadcast_job"
+            )
         
         self.scheduler.start()
         logging.info(f"⚙️ Планировщик парсера запущен")
@@ -173,6 +267,8 @@ class ParserSchedulerService:
         logging.info(f"   📡 Job 2: Синхронизация с веб-сайтом - каждый день в 5:00 AM")
         logging.info(f"   🏢 Job 3: Синхронизация занятости - каждые 4 часа")
         logging.info(f"   🧹 Job 4: Плановое обслуживание - каждое воскресенье в 4:00 AM")
+        if self.group_chat_repo and self.bot:
+            logging.info(f"   📢 Job 5: Авторассылка в группы - каждую минуту")
         
         # Запуск парсера сразу при старте (если включено)
         if self.run_on_startup:

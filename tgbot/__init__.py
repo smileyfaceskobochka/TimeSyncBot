@@ -1,0 +1,1 @@
+"""TimeSyncBot core package."""

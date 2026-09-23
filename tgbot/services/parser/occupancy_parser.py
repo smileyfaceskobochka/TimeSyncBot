@@ -8,13 +8,14 @@ import hashlib
 from typing import List
 
 import aiohttp
-from bs4 import BeautifulSoup
+from selectolax.parser import HTMLParser
 from sqlalchemy import select, create_engine
 from sqlalchemy.orm import Session
 
 from tgbot.config import config
 from tgbot.database.models import Occupancy, ProcessedFile
 from tgbot.services.parser.site_to_pdf import check_website_status
+from tgbot.services.parser.utils import calculate_hash
 
 # Constants (centralized in config)
 INDEX_URL = config.OCCUPANCY_URL
@@ -27,13 +28,9 @@ PAIR_INTERVALS = {
 }
 
 
-def calculate_hash(content: bytes) -> str:
-    return hashlib.md5(content).hexdigest()
-
-
-def parse_html_table(html: bytes, building: str) -> List[Occupancy]:
+def parse_html_table(html: bytes | str, building: str) -> List[Occupancy]:
     """
-    Parses the HTML room occupancy table from VyatSU.
+    Parses the HTML room occupancy table from VyatSU using fast selectolax parser.
     
     Structure:
     - Row 0: date spans (e.g. "26.02.2026")  
@@ -43,26 +40,26 @@ def parse_html_table(html: bytes, building: str) -> List[Occupancy]:
     results = []
     
     try:
-        soup = BeautifulSoup(html, 'html.parser')
-        table = soup.find('table')
+        tree = HTMLParser(html)
+        table = tree.css_first('table')
         if not table:
             logging.warning(f"  No table found for building {building}")
             return []
         
-        rows = table.find_all('tr')
+        rows = table.css('tr')
         if len(rows) < 2:
             return []
         
         # Row 1 contains room headers (0-indexed: rows[1])
         header_row = rows[1]
-        header_cells = header_row.find_all('td')
+        header_cells = header_row.css('td, th')
         
         # Build col_index -> room_name mapping (skip first 2: "День" and "Интервал")
         col_to_room = {}
         for col_idx, cell in enumerate(header_cells):
             if col_idx < 2: continue  # Skip "День" and "Интервал"
             
-            text = cell.get_text(strip=True)
+            text = cell.text(strip=True)
             if not text:
                 continue
                 
@@ -88,13 +85,13 @@ def parse_html_table(html: bytes, building: str) -> List[Occupancy]:
         current_date = None
         
         for row in rows[2:]:
-            cells = row.find_all('td')
+            cells = row.css('td, th')
             if not cells:
                 continue
             
             # Check if this row has a date cell (col 0 with day text)
             day_cell = cells[0]
-            day_text = day_cell.get_text(strip=True)
+            day_text = day_cell.text(strip=True)
             # Day text looks like "Пн 16.02.26" or contains date
             date_match = re.search(r'(\d{2})\.(\d{2})\.(\d{2,4})', day_text)
             if date_match:
@@ -106,10 +103,9 @@ def parse_html_table(html: bytes, building: str) -> List[Occupancy]:
                 continue
             
             # Find pair number from col 1 (or first cell if no date cell)
-            # "1 пара", "2 пара", etc.
             pair_num = None
             for cell in cells:
-                cell_text = cell.get_text(strip=True)
+                cell_text = cell.text(strip=True)
                 pair_match = re.match(r'^(\d)\s*пара', cell_text)
                 if pair_match:
                     pair_num = int(pair_match.group(1))
@@ -124,7 +120,7 @@ def parse_html_table(html: bytes, building: str) -> List[Occupancy]:
                     continue
                 
                 cell = cells[col_idx]
-                cell_text = cell.get_text(strip=True)
+                cell_text = cell.text(strip=True)
                 is_free = not cell_text or cell_text.lower() in ('none', 'nan', '')
                 group_name = cell_text if not is_free else None
                 
@@ -214,11 +210,16 @@ async def update_occupancy(engine=None, progress=None):
             if progress: await progress.report(f"❌ Ошибка: {e}", 1.0)
             return
         
-        soup = BeautifulSoup(html_index, 'html.parser')
+        tree = HTMLParser(html_index)
         
         # Find all .html report links
         # URL pattern: /reports/schedule/room/BUILDING_1_STARTDATE_ENDDATE.html
-        all_links = soup.find_all('a', href=re.compile(r'/reports/schedule/room/\d+_\d+_\d+_\d+\.html'))
+        report_pattern = re.compile(r'/reports/schedule/room/\d+_\d+_\d+_\d+\.html')
+        all_links = [
+            node.attributes.get('href') 
+            for node in tree.css('a[href]') 
+            if node.attributes.get('href') and report_pattern.search(node.attributes.get('href', ''))
+        ]
         
         if not all_links:
             logging.warning("  No occupancy report links found on index page!")
@@ -231,8 +232,7 @@ async def update_occupancy(engine=None, progress=None):
         
         today = date.today()
         
-        for link in all_links:
-            href = link['href']
+        for href in all_links:
             fname = Path(href).name  # e.g. "2_1_16022026_01032026.html"
             parts = fname.replace('.html', '').split('_')
             if len(parts) < 4:

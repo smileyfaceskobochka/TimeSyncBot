@@ -6,7 +6,7 @@ from typing import List, Dict, Tuple
 from urllib.parse import urljoin
 
 import aiohttp
-from bs4 import BeautifulSoup
+from selectolax.parser import HTMLParser
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -14,7 +14,7 @@ from tgbot.config import config
 from tgbot.database.models import Lesson
 from tgbot.services.parser.site_to_pdf import check_website_status
 
-TEACHER_URL = "https://www.vyatsu.ru/studentu-1/spravochnaya-informatsiya/teacher.html"
+TEACHER_URL = config.TEACHER_URL
 BASE_URL = config.VYATSU_BASE_URL
 HEADERS = config.HTTP_HEADERS
 
@@ -22,6 +22,7 @@ async def get_teacher_navigation_data() -> List[Dict]:
     """
     Scrapes the teacher occupancy main page to get the hierarchy:
     Institute -> Faculty -> Department -> Report Links
+    Uses fast selectolax parser.
     """
     async with aiohttp.ClientSession(headers=HEADERS) as session:
         try:
@@ -34,13 +35,13 @@ async def get_teacher_navigation_data() -> List[Dict]:
             logging.error(f"Error fetching teacher navigation: {e}")
             return []
 
-    soup = BeautifulSoup(html, 'html.parser')
+    tree = HTMLParser(html)
     institutes = []
     
     # The structure on the page uses div.fak_name for Faculties/Institutes
     # and div.kafPeriod for nested departments, with listPeriod holding the reports.
-    for fak_div in soup.find_all('div', class_='fak_name'):
-        inst_name = fak_div.text.strip()
+    for fak_div in tree.css('div.fak_name'):
+        inst_name = fak_div.text(strip=True)
         
         current_inst = {
             "name": inst_name,
@@ -48,23 +49,23 @@ async def get_teacher_navigation_data() -> List[Dict]:
         }
         institutes.append(current_inst)
         
-        fak_id = fak_div.get('data-fak_id')
-        block_content = soup.find('div', id=f"fak_id_{fak_id}")
+        fak_id = fak_div.attributes.get('data-fak_id')
+        block_content = tree.css_first(f"#fak_id_{fak_id}") if fak_id else None
         
         if block_content:
-            for kaf_div in block_content.find_all('div', class_='kafPeriod'):
-                dept_name = kaf_div.text.strip()
+            for kaf_div in block_content.css('div.kafPeriod'):
+                dept_name = kaf_div.text(strip=True)
                 
-                kaf_period_id = kaf_div.get('data-kaf_period_id')
-                list_period = block_content.find('div', id=f"listPeriod_{kaf_period_id}")
+                kaf_period_id = kaf_div.attributes.get('data-kaf_period_id')
+                list_period = block_content.css_first(f"#listPeriod_{kaf_period_id}") if kaf_period_id else None
                 
                 reports = []
                 if list_period:
-                    for a in list_period.find_all('a'):
-                        href = a.get('href')
+                    for a in list_period.css('a[href]'):
+                        href = a.attributes.get('href', '')
                         if href and href.endswith('.html'):
                             reports.append({
-                                "period": a.text.strip(),
+                                "period": a.text(strip=True),
                                 "url": urljoin(BASE_URL, href)
                             })
                 
@@ -76,63 +77,147 @@ async def get_teacher_navigation_data() -> List[Dict]:
 
     return institutes
 
-def parse_teacher_html_report(html: bytes, dept_name: str) -> List[Lesson]:
+def find_active_teacher_reports(nav_data: List[Dict]) -> List[Tuple[str, str]]:
+    """Returns a list of (dept_name, report_url) for the current active period."""
+    today = date.today()
+    active_reports = []
+    
+    for inst in nav_data:
+        for fac in inst.get("faculties", []):
+            for dept in fac.get("departments", []):
+                dept_name = dept.get("name", "")
+                reports = dept.get("reports", [])
+                if not reports:
+                    continue
+                
+                selected_url = None
+                for rep in reports:
+                    m = re.search(r'c\s+(\d{2})\s+(\d{2})\s+(\d{4})\s+по\s+(\d{2})\s+(\d{2})\s+(\d{4})', rep.get("period", ""))
+                    if m:
+                        try:
+                            start_d = date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+                            end_d = date(int(m.group(6)), int(m.group(5)), int(m.group(4)))
+                            if start_d <= today <= end_d:
+                                selected_url = rep["url"]
+                                break
+                        except ValueError:
+                            pass
+                
+                if not selected_url and reports:
+                    selected_url = reports[0]["url"]
+                    
+                if selected_url:
+                    active_reports.append((dept_name, selected_url))
+                    
+    return active_reports
+
+def parse_teacher_cell_entry(raw_line: str) -> Dict:
+    """Parses a single line from a teacher report cell into structured components."""
+    # 1. Room: e.g. '2-209', '1-535_', '4-302', 'ФОК-1', 'Гл.-204'
+    room_match = re.search(r'(\d{1,2}|ФОК|Гл\.[^\s_]*)\s*-\s*([^\s_]+)', raw_line)
+    bld, aud = '', ''
+    clean_line = raw_line
+    if room_match:
+        bld = room_match.group(1).strip()
+        aud = room_match.group(2).strip(' _')
+        clean_line = clean_line[:room_match.start()] + ' ' + clean_line[room_match.end():]
+    
+    clean_line = clean_line.strip(' _')
+    
+    # 2. Known lesson types
+    type_pattern = r'\b(Лекция|Практическое занятие|Лабораторная работа|Семинар|Консультация|Дифференцированный зачет|Дифференцированный зачёт|Зачет|Зачёт|Экзамен|Курсовая работа|Курсовой проект)\b'
+    m_type = re.search(type_pattern, clean_line, re.IGNORECASE)
+    
+    if m_type:
+        subject = clean_line[:m_type.start()].strip(' ,')
+        class_type = m_type.group(1).strip()
+        rest = clean_line[m_type.end():].strip(' ,')
+    else:
+        m_grp = re.search(r'\b([А-Яа-яЁёA-Za-z]+-[0-9]{3,4})', clean_line)
+        if m_grp:
+            subject = clean_line[:m_grp.start()].strip(' ,')
+            class_type = ''
+            rest = clean_line[m_grp.start():].strip(' ,')
+        else:
+            subject = clean_line
+            class_type = ''
+            rest = ''
+            
+    # 3. Extract groups and subgroups from rest
+    parts = re.findall(r'([А-Яа-яЁёA-Za-z]+-[0-9]{3,4}(?:-[0-9]{2}-[0-9]{2})?)(?:,\s*(\d{1,2})\s*подгруппа)?', rest)
+    groups_dict = {}
+    for grp, sub in parts:
+        if grp not in groups_dict:
+            groups_dict[grp] = set()
+        if sub:
+            groups_dict[grp].add(int(sub))
+            
+    group_strs = []
+    is_lecture = 'лек' in class_type.lower()
+    for grp, subs in groups_dict.items():
+        if not is_lecture and len(subs) == 1:
+            group_strs.append(f'{grp} ({next(iter(subs))} подгр.)')
+        else:
+            group_strs.append(grp)
+            
+    return {
+        'building': bld or None,
+        'room': aud or None,
+        'subject': subject or "Занятие",
+        'class_type': class_type or None,
+        'groups_str': ', '.join(group_strs) if group_strs else None
+    }
+
+
+def parse_teacher_html_report(html: bytes | str, dept_name: str) -> List[Lesson]:
     """
-    Parses a department teacher report.
+    Parses a department teacher report using fast selectolax parser.
     Structure:
     - Row 0: Date spans (headers)
     - Row 1: Teachers names (headers)
     - Rows 2+: Time intervals and lesson data
     """
-    soup = BeautifulSoup(html, 'html.parser')
-    table = soup.find('table')
+    tree = HTMLParser(html)
+    table = tree.css_first('table')
     if not table:
         return []
 
-    rows = table.find_all('tr')
+    rows = table.css('tr')
     if len(rows) < 3:
         return []
 
     # Row 0: Date headers (col0=blank, col1=blank, col2+=date)
     # Row 1: Teachers (col0=blank, col1=Интервал, col2+=teacher name)
-    
     teachers = []
     teacher_cols = [] # Map column index to teacher name
     
     # Process Row 1 to find teachers. They start from col 2 (idx 2)
-    header_cells = rows[1].find_all(['td', 'th'])
+    header_cells = rows[1].css('td, th')
     for idx, cell in enumerate(header_cells):
-        txt = cell.get_text(strip=True).replace('\xa0', ' ')
+        txt = cell.text(strip=True).replace('\xa0', ' ')
         if idx >= 2 and txt:
             teachers.append(txt)
             teacher_cols.append((idx, txt))
 
-    # Row 0 gives us the dates. These tables are often organized by days.
-    # col0 usually has the "rotated" day name (Понедельник...)
-    
     current_date = None
     results = []
     
     # Map pair numbers to time slots
-    TIME_SLOTS = config.TIME_SLOTS # e.g. "08:20" -> 1
+    TIME_SLOTS = config.TIME_SLOTS
     
     for row in rows[2:]:
-        cells = row.find_all(['td', 'th'])
+        cells = row.css('td, th')
         if not cells:
             continue
             
-        # Tables with rowspans mean the first cell isn't always the day.
-        # But if it contains a date pattern, it's the day cell.
-        date_match = None
         time_cell_idx = 0
         
         # Check if first cell has a date
-        day_text = cells[0].get_text(strip=True)
+        day_text = cells[0].text(strip=True)
         date_match = re.search(r'(\d{2}\.\d{2}\.\d{2,4})', day_text)
         
         if date_match:
             try:
-                # Could be 2-digit year (e.g. 16.03.26)
                 date_str = date_match.group(1)
                 fmt = '%d.%m.%y' if len(date_str.split('.')[2]) == 2 else '%d.%m.%Y'
                 current_date = datetime.strptime(date_str, fmt).date()
@@ -147,11 +232,12 @@ def parse_teacher_html_report(html: bytes, dept_name: str) -> List[Lesson]:
             continue
 
         # Time interval "08:20-09:50"
-        time_cell = cells[time_cell_idx].get_text(strip=True)
+        time_cell = cells[time_cell_idx].text(strip=True)
         if not re.match(r'\d{2}:\d{2}-\d{2}:\d{2}', time_cell):
             continue
             
         start_time = time_cell.split('-')[0]
+        end_time = time_cell.split('-')[1] if '-' in time_cell else None
         pair_num = TIME_SLOTS.get(start_time)
 
         # Process teachers columns
@@ -159,37 +245,36 @@ def parse_teacher_html_report(html: bytes, dept_name: str) -> List[Lesson]:
             if col_idx >= len(cells):
                 continue
                 
-            cell_content = cells[col_idx].get_text(" ", strip=True)
-            if not cell_content:
+            cell = cells[col_idx]
+            cell_html = cell.html or ""
+            # Replace <br> tags with newline to separate multiple items inside a single cell
+            cell_text = re.sub(r'<br\s*/?>', '\n', cell_html)
+            cell_text = re.sub(r'<[^>]+>', '', cell_text).replace('\xa0', ' ')
+            lines = [l.strip() for l in cell_text.split('\n') if l.strip()]
+            if not lines:
                 continue
             
-            # Cell usually contains: [Auditory] [Subject] [Type] [Groups]
-            # Example: "1-236 Промпт-инжиниринг Лекция ИВТб-2301"
-            # We can use our existing parse_lesson_details if we tweak it or handle it here.
-            
-            # Rough split: room usually looks like digits-digits
-            room_match = re.search(r'(\d{1,2}|ФОК|Гл\.[^\s]*)\s*-\s*([^\s]+)', cell_content)
-            room = room_match.group(0) if room_match else ""
-            remaining = cell_content.replace(room, "").strip()
-            
-            results.append(Lesson(
-                group_name="Multiple", # Teacher reports combine groups
-                date=current_date.isoformat(),
-                pair_number=pair_num,
-                start_time=start_time,
-                end_time=time_cell.split('-')[1] if '-' in time_cell else None,
-                teacher=teacher_name,
-                building=room_match.group(1) if room_match else None,
-                room=room_match.group(2) if room_match else None,
-                raw_info=cell_content,
-                subject=remaining
-            ))
+            for line in lines:
+                entry = parse_teacher_cell_entry(line)
+                results.append(Lesson(
+                    group_name=entry['groups_str'] or "Не указана",
+                    date=current_date.isoformat(),
+                    pair_number=pair_num,
+                    start_time=start_time,
+                    end_time=end_time,
+                    teacher=teacher_name,
+                    building=entry['building'],
+                    room=entry['room'],
+                    class_type=entry['class_type'],
+                    subject=entry['subject'],
+                    raw_info=line
+                ))
 
     return results
 
 async def update_all_teachers_data():
     """
     (Optional/Internal) Scans all reports and caches teacher names.
-    Since reports are dynamic, we might perform on-demand lookup instead.
+    Since reports are dynamic, we perform on-demand lookup instead.
     """
     pass

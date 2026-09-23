@@ -19,3 +19,7 @@ class MeetingState(StatesGroup):
 
 class AdminStates(StatesGroup):
     waiting_for_broadcast = State()
+
+class FeedbackState(StatesGroup):
+    waiting_for_feedback = State()
+    waiting_for_admin_reply = State()

@@ -3,6 +3,7 @@ from aiogram.filters.callback_data import CallbackData
 class GroupSelectCb(CallbackData, prefix="sel_grp"):
     name: str
     action: str
+    page: int = 1
 
 class ScheduleNav(CallbackData, prefix="nav"):
     action: str
@@ -29,6 +30,16 @@ class FreeRoomsDate(CallbackData, prefix="fr_date"):
 
 class TeacherNav(CallbackData, prefix="teach"):
     action: str
-    target: str = "" # name or index
-    fac: str = ""    # parent faculty
-    inst: str = ""   # parent institute
+    target: str = ""    # Name or short ID
+    date_val: str = ""  # Date (YYYY-MM-DD)
+    fac: str = ""       # Faculty index/id
+    inst: str = ""      # Institute index/id
+
+class GroupChatCb(CallbackData, prefix="grp_chat"):
+    action: str
+    value: str = ""
+
+
+class FeedbackCb(CallbackData, prefix="fb"):
+    action: str
+    user_id: int = 0

@@ -48,14 +48,7 @@ async def handle_get_schedule(request: web.Request) -> web.Response:
     # Return 7 days of schedule starting from the requested date
     for offset in range(7):
         day = target + timedelta(days=offset)
-        lessons = await repo.get_lessons(group_name, day)
-
-        if not lessons:
-            # Try predicted schedule if nothing was found for this day
-            lessons = await repo.get_predicted_schedule(group_name, day)
-            predicted = bool(lessons)
-        else:
-            predicted = False
+        lessons, predicted = await repo.get_lessons_with_status(group_name, day)
 
         schedule_days.append({
             "date": day.isoformat(),
