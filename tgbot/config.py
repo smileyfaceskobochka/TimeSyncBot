@@ -79,8 +79,11 @@ class Settings(BaseSettings):
     SCHEDULE_URL: str = "https://www.vyatsu.ru/studentu-1/spravochnaya-informatsiya/raspisanie-zanyatiy-dlya-studentov.html"
     OCCUPANCY_URL: str = "https://www.vyatsu.ru/studentu-1/spravochnaya-informatsiya/zanyatost-auditoriy.html"
     TEACHER_URL: str = "https://www.vyatsu.ru/studentu-1/spravochnaya-informatsiya/teacher.html"
+    # NOTE: vyatsu.ru tarpits browser-like User-Agents (request hangs until
+    # timeout) but answers tool UAs. Verified 2026-09-23: curl/8.14.1 -> 200
+    # in ~1.5s, while Chrome/Firefox/Wget/custom UAs all timed out.
     HTTP_HEADERS: Dict[str, str] = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": "curl/8.14.1"
     }
 
 config = Settings()
