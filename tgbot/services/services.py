@@ -70,63 +70,137 @@ class ScheduleService:
         if not lessons:
             return f"{header}\n\n🎉 Пар нет!"
 
+        # 1. Дедупликация уроков в памяти
+        unique_lessons = []
+        seen = set()
+        for l in lessons:
+            key = (
+                l.pair_number,
+                l.start_time,
+                l.end_time,
+                (l.subject or "").strip().lower(),
+                (l.class_type or "").strip().lower(),
+                (l.teacher or "").strip().lower(),
+                (l.building or "").strip().lower(),
+                (l.room or "").strip().lower(),
+                (l.subgroup or "").strip()
+            )
+            if key not in seen:
+                seen.add(key)
+                unique_lessons.append(l)
+
+        # 2. Группировка уроков по номеру пары
+        pairs_dict: Dict[int, List[Lesson]] = {}
+        no_pair_lessons: List[Lesson] = []
+        for l in unique_lessons:
+            p_num = l.pair_number
+            if not p_num and l.start_time in config.TIME_SLOTS:
+                p_num = config.TIME_SLOTS[l.start_time]
+            if p_num:
+                pairs_dict.setdefault(p_num, []).append(l)
+            else:
+                no_pair_lessons.append(l)
+
         lines = [header]
         prev_pair = None
 
-        for l in lessons:
-            if settings.show_windows and prev_pair is not None and l.pair_number:
-                if l.pair_number > prev_pair + 1:
-                    window_pairs = l.pair_number - prev_pair - 1
+        for p_num in sorted(pairs_dict.keys()):
+            pair_lessons = pairs_dict[p_num]
+            pair_lessons.sort(key=lambda x: (x.subgroup or "", x.teacher or ""))
+
+            if settings.show_windows and prev_pair is not None:
+                if p_num > prev_pair + 1:
+                    window_pairs = p_num - prev_pair - 1
                     lines.append(
                         f"\n⏸️ <i>Окно ({window_pairs} {'пара' if window_pairs == 1 else 'пары'})</i>"
                     )
+            prev_pair = p_num
 
-            if l.pair_number:
-                prev_pair = l.pair_number
-
-            icon = "⚪️"
-            if l.class_type:
-                ctype_lower = l.class_type.lower()
-                if "лек" in ctype_lower:
-                    icon = "🔴"
-                elif "прак" in ctype_lower or "пр." in ctype_lower:
-                    icon = "🟢"
-                elif "лаб" in ctype_lower:
-                    icon = "🔵"
-                elif "зачет" in ctype_lower or "экзамен" in ctype_lower:
-                    icon = "⚠️"
-
-            start = l.start_time
-            end = l.end_time
-            if (not start or not end) and l.pair_number and l.pair_number in config.STANDARD_PAIRS:
-                std_parts = config.STANDARD_PAIRS[l.pair_number].split(" - ")
+            first_l = pair_lessons[0]
+            start = first_l.start_time
+            end = first_l.end_time
+            if (not start or not end) and p_num in config.STANDARD_PAIRS:
+                std_parts = config.STANDARD_PAIRS[p_num].split(" - ")
                 start = start or std_parts[0]
                 end = end or std_parts[1]
-
             start = start or "??"
             end = end or "??"
-            pair_num = l.pair_number if l.pair_number else (config.TIME_SLOTS.get(start, "?") if start != "??" else "?")
 
-            # --- ИЗМЕНЕН ФОРМАТ ВРЕМЕНИ И ПАРЫ ---
-            lines.append(f"\n<b>{pair_num} {icon} {start} - {end}</b>")
+            icon = "⚪️"
+            all_types = " ".join((l.class_type or "").lower() for l in pair_lessons)
+            if "лек" in all_types:
+                icon = "🔴"
+            elif "прак" in all_types or "пр." in all_types:
+                icon = "🟢"
+            elif "лаб" in all_types:
+                icon = "🔵"
+            elif "зачет" in all_types or "экзамен" in all_types:
+                icon = "⚠️"
 
-            if not l.subject and not l.teacher and not l.room and l.raw_info:
-                lines.append(f"❓ <i>{l.raw_info.strip()}</i>")
-                continue
+            lines.append(f"\n<b>{p_num} {icon} {start} - {end}</b>")
 
-            subject = l.subject if l.subject else "Предмет не указан"
-            class_type_str = f"{l.class_type}" if l.class_type else ""
-            lines.append(f"<b>{subject}</b>\n{class_type_str}")
+            first_sub = (first_l.subject or "").strip().lower()
+            first_tch = (first_l.teacher or "").strip().lower()
+            first_bld = (first_l.building or "").strip().lower()
+            first_rm = (first_l.room or "").strip().lower()
+            all_identical = all(
+                (l.subject or "").strip().lower() == first_sub and
+                (l.teacher or "").strip().lower() == first_tch and
+                (l.building or "").strip().lower() == first_bld and
+                (l.room or "").strip().lower() == first_rm
+                for l in pair_lessons
+            )
 
-            meta = []
-            if settings.show_teachers and l.teacher:
-                meta.append(f"👤 {l.teacher}")
-            if settings.show_building and (l.building or l.room):
-                building_str = l.building if l.building else ""
-                room_str = l.room if l.room else ""
-                meta.append(f"📍 {building_str}-{room_str}")
-            if meta:
-                lines.append(" | ".join(meta))
+            if all_identical:
+                # Все подгруппы занимаются вместе у одного преподавателя в одной аудитории
+                subject = first_l.subject if first_l.subject else "Предмет не указан"
+                class_type_str = f"{first_l.class_type}" if first_l.class_type else ""
+                lines.append(f"<b>{subject}</b>\n{class_type_str}")
+
+                meta = []
+                if settings.show_teachers and first_l.teacher:
+                    meta.append(f"👤 {first_l.teacher}")
+                if settings.show_building and (first_l.building or first_l.room):
+                    b_str = first_l.building if first_l.building else ""
+                    r_str = first_l.room if first_l.room else ""
+                    meta.append(f"📍 {b_str}-{r_str}")
+                if meta:
+                    lines.append(" | ".join(meta))
+            else:
+                # Разделение на подгруппы (разные преподаватели/аудитории/предметы)
+                same_subject = all(
+                    (l.subject or "").strip().lower() == first_sub
+                    for l in pair_lessons
+                )
+                if same_subject and first_l.subject:
+                    c_type_str = f"\n{first_l.class_type}" if first_l.class_type else ""
+                    lines.append(f"<b>{first_l.subject}</b>{c_type_str}")
+
+                for l in pair_lessons:
+                    sg_raw = l.subgroup.lstrip("0") if l.subgroup else ""
+                    sg_prefix = f"👥 {sg_raw} п/г: " if sg_raw else ""
+
+                    item_parts = []
+                    if not same_subject and l.subject:
+                        c_str = f" ({l.class_type})" if l.class_type else ""
+                        item_parts.append(f"<b>{l.subject}</b>{c_str}")
+
+                    if settings.show_teachers and l.teacher:
+                        item_parts.append(f"👤 {l.teacher}")
+                    if settings.show_building and (l.building or l.room):
+                        b_str = l.building if l.building else ""
+                        r_str = l.room if l.room else ""
+                        item_parts.append(f"📍 {b_str}-{r_str}")
+
+                    if item_parts:
+                        lines.append(f"{sg_prefix}{' | '.join(item_parts)}")
+                    elif l.raw_info:
+                        lines.append(f"{sg_prefix}❓ <i>{l.raw_info.strip()}</i>")
+
+        for l in no_pair_lessons:
+            if l.raw_info:
+                lines.append(f"\n❓ <i>{l.raw_info.strip()}</i>")
+
         return "\n".join(lines)
 
 

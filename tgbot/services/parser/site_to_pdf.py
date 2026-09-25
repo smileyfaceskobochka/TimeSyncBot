@@ -261,10 +261,8 @@ async def main_downloader(db_manager: DatabaseManager = None, group_keywords: Li
         for res in results:
             if res:
                 f_path, g_name, f_name, f_hash = res
-                if f_hash:  # New or changed
+                if f_hash:  # New or changed file
                     processed_files.append((f_path, g_name))
                     await asyncio.to_thread(_sync_update_processed_file, session_factory, f_name, f_hash)
-                else:
-                    processed_files.append((f_path, g_name))
         
         return processed_files

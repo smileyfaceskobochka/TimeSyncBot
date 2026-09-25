@@ -67,6 +67,22 @@ class UserRepository(BaseRepository):
                     columns = [row[1] for row in cursor.fetchall()]
                     if "favorite_teachers_json" not in columns:
                         cursor.execute("ALTER TABLE user ADD COLUMN favorite_teachers_json VARCHAR DEFAULT '[]';")
+                    # Очистка дубликатов занятий, если они накопились в базе
+                    cursor.execute("""
+                        DELETE FROM lesson
+                        WHERE id NOT IN (
+                            SELECT MIN(id)
+                            FROM lesson
+                            GROUP BY group_name, date, pair_number,
+                                     ifnull(start_time, ''),
+                                     ifnull(subject, ''),
+                                     ifnull(class_type, ''),
+                                     ifnull(teacher, ''),
+                                     ifnull(building, ''),
+                                     ifnull(room, ''),
+                                     ifnull(subgroup, '')
+                        );
+                    """)
                     session.connection().connection.commit()
                 except Exception as e:
                     logging.debug(f"User table migration note: {e}")
@@ -248,6 +264,35 @@ class ScheduleRepository(BaseRepository):
                 ))
                 return matches[:100]
         return await asyncio.to_thread(_sync_search)
+
+    async def search_teachers(self, query: str) -> List[str]:
+        query_clean = query.strip().lower()
+        if not query_clean: return []
+        def _sync_search():
+            with self.db_manager.get_session() as session:
+                statement = select(Lesson.teacher).where(Lesson.teacher.is_not(None)).distinct()
+                result = session.execute(statement)
+                all_teachers = [t for t in result.scalars().all() if t]
+                matches = [t for t in all_teachers if query_clean in t.lower()]
+                matches.sort(key=lambda x: (
+                    0 if x.lower() == query_clean 
+                    else 1 if x.lower().startswith(query_clean) 
+                    else 2
+                ))
+                return matches[:20]
+        return await asyncio.to_thread(_sync_search)
+
+    async def get_lessons_for_teacher(self, teacher_name: str, target_date: Optional[date] = None) -> List[Lesson]:
+        def _sync_get():
+            with self.db_manager.get_session() as session:
+                statement = select(Lesson).where(
+                    Lesson.teacher.ilike(f"%{teacher_name}%")
+                )
+                if target_date:
+                    statement = statement.where(Lesson.date == target_date.isoformat())
+                statement = statement.order_by(Lesson.date, Lesson.pair_number)
+                return list(session.execute(statement).scalars().all())
+        return await asyncio.to_thread(_sync_get)
 
     async def get_tracked_groups_count(self) -> int:
         def _sync_count():

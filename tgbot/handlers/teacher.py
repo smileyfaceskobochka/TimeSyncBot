@@ -591,7 +591,25 @@ def _format_teacher_day(teacher_name: str, lessons: List[dict], target_date: dat
         return "\n".join(lines)
 
     sorted_pairs = sorted(day_lessons, key=lambda x: x.get("pair_number") or 0)
+    merged_pairs = {}
     for l in sorted_pairs:
+        key = (
+            l.get("pair_number"),
+            l.get("start_time"),
+            (l.get("subject") or "").strip().lower(),
+            (l.get("class_type") or "").strip().lower(),
+            (l.get("room") or "").strip().lower(),
+            (l.get("building") or "").strip().lower()
+        )
+        if key not in merged_pairs:
+            merged_pairs[key] = dict(l)
+        else:
+            existing_grp = merged_pairs[key].get("groups") or ""
+            new_grp = l.get("groups") or ""
+            all_grps = [g.strip() for g in f"{existing_grp}, {new_grp}".split(",") if g.strip()]
+            merged_pairs[key]["groups"] = ", ".join(sorted(list(set(all_grps))))
+
+    for l in merged_pairs.values():
         lines.append(_format_teacher_pair(l))
 
     return "\n".join(lines).strip()

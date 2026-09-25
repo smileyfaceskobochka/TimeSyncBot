@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pdfplumber
 import pymupdf as fitz
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, delete
 from sqlalchemy.orm import Session
 
 from tgbot.config import config
@@ -169,9 +169,45 @@ def process_pdf_sync(file_path, group_name):
         return []
     return data_list
 
-def _sync_save_lessons(engine, lessons):
+def _sync_save_lessons(engine, lessons: List[Lesson]):
+    if not lessons:
+        return
     with Session(engine) as session:
-        session.add_all(lessons)
+        # 1. Группируем по названиям групп и их датам в текущем файле
+        group_dates = {}
+        for l in lessons:
+            group_dates.setdefault(l.group_name, set()).add(l.date)
+
+        # 2. Удаляем старые записи для этих групп и дат перед вставкой новых
+        for g_name, dates in group_dates.items():
+            session.execute(
+                delete(Lesson).where(
+                    Lesson.group_name == g_name,
+                    Lesson.date.in_(list(dates))
+                )
+            )
+
+        # 3. Дедупликация в памяти внутри пачки
+        unique_lessons = []
+        seen = set()
+        for l in lessons:
+            key = (
+                l.group_name,
+                l.date,
+                l.pair_number,
+                l.start_time,
+                (l.subject or "").strip().lower(),
+                (l.class_type or "").strip().lower(),
+                (l.teacher or "").strip().lower(),
+                (l.building or "").strip().lower(),
+                (l.room or "").strip().lower(),
+                (l.subgroup or "").strip()
+            )
+            if key not in seen:
+                seen.add(key)
+                unique_lessons.append(l)
+
+        session.add_all(unique_lessons)
         session.commit()
 
 async def save_lessons_to_db(lessons: List[Lesson], engine=None):

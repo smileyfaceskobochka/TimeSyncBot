@@ -124,40 +124,105 @@ async def handle_inline_query(
             )
         )
 
-    # 3. Поиск преподавателя, если введены хотя бы 3 символа.
-    # Живой скрапинг отчётов кафедр медленный (секунды), а инлайн ждёт быстрый
-    # ответ, поэтому ограничиваем его таймаутом и группируем по реальным ФИО.
-    if len(query) >= 3 and len(results) < 8:
-        logger.info(f"Searching teacher for query: '{query}'")
-        try:
-            teacher_lessons = await asyncio.wait_for(
-                fetch_teacher_lessons(query), timeout=8.0
+    # 3. Поиск преподавателя
+    # Сначала ищем по локальной базе данных (мгновенный ответ < 10 мс)
+    found_teachers = await schedule_repo.search_teachers(query)
+    logger.info(f"Found teachers in DB for '{query}': {found_teachers}")
+    
+    for t_name in found_teachers[:3]:
+        if len(results) >= 8:
+            break
+        t_lessons = await schedule_repo.get_lessons_for_teacher(t_name)
+        dict_lessons = [{
+            "date": l.date,
+            "pair_number": l.pair_number,
+            "start_time": l.start_time,
+            "end_time": l.end_time,
+            "subject": l.subject,
+            "class_type": l.class_type,
+            "building": l.building,
+            "room": l.room,
+            "groups": l.group_name,
+            "raw_info": l.raw_info,
+        } for l in t_lessons]
+
+        # Сегодня
+        text_today = _clip(_format_teacher_day(t_name, dict_lessons, today))
+        results.append(
+            InlineQueryResultArticle(
+                id=hashlib.md5(f"teach_{t_name}_today_{today.isoformat()}".encode()).hexdigest(),
+                title=f"👨‍🏫 {t_name} — Сегодня",
+                description=f"Расписание преподавателя {t_name} на сегодня",
+                input_message_content=InputTextMessageContent(
+                    message_text=text_today,
+                    parse_mode="HTML"
+                )
             )
-            logger.info(f"Teacher lessons for '{query}': {len(teacher_lessons) if teacher_lessons else 0} lessons")
-            if teacher_lessons:
-                by_teacher = {}
-                for lesson in teacher_lessons:
-                    name = (lesson.get("teacher") or query).strip() or query
-                    by_teacher.setdefault(name, []).append(lesson)
-                for teacher_name in sorted(by_teacher.keys())[:3]:
-                    if len(results) >= 8:
-                        break
-                    text_teach = _clip(_format_teacher_day(teacher_name, by_teacher[teacher_name], today))
-                    results.append(
-                        InlineQueryResultArticle(
-                            id=hashlib.md5(f"teach_{teacher_name}_{today.isoformat()}".encode()).hexdigest(),
-                            title=f"👨‍🏫 {teacher_name} — Сегодня",
-                            description=f"Расписание преподавателя {teacher_name} на сегодня",
-                            input_message_content=InputTextMessageContent(
-                                message_text=text_teach,
-                                parse_mode="HTML"
-                            )
+        )
+        # Завтра
+        text_tmrw = _clip(_format_teacher_day(t_name, dict_lessons, tomorrow))
+        results.append(
+            InlineQueryResultArticle(
+                id=hashlib.md5(f"teach_{t_name}_tmrw_{tomorrow.isoformat()}".encode()).hexdigest(),
+                title=f"👨‍🏫 {t_name} — Завтра",
+                description=f"Расписание преподавателя {t_name} на завтра",
+                input_message_content=InputTextMessageContent(
+                    message_text=text_tmrw,
+                    parse_mode="HTML"
+                )
+            )
+        )
+
+    # Если в базе преподаватель не найден и результатов мало — пробуем кэш и быстрый онлайн-поиск (до 1.5 сек)
+    if not found_teachers and len(query) >= 3 and len(results) < 8:
+        from tgbot.handlers.teacher import _teacher_lessons_cache
+        cached_matches = [
+            (name, data[1]) for name, data in _teacher_lessons_cache.items()
+            if query.lower() in name.lower()
+        ]
+        if cached_matches:
+            for teacher_name, t_lessons in cached_matches[:3]:
+                if len(results) >= 8:
+                    break
+                text_teach = _clip(_format_teacher_day(teacher_name, t_lessons, today))
+                results.append(
+                    InlineQueryResultArticle(
+                        id=hashlib.md5(f"teach_cache_{teacher_name}_{today.isoformat()}".encode()).hexdigest(),
+                        title=f"👨‍🏫 {teacher_name} — Сегодня",
+                        description=f"Расписание преподавателя {teacher_name} на сегодня (из кэша)",
+                        input_message_content=InputTextMessageContent(
+                            message_text=text_teach,
+                            parse_mode="HTML"
                         )
                     )
-        except asyncio.TimeoutError:
-            logger.warning(f"Inline teacher search timed out for query: '{query}'")
-        except Exception as e:
-            logger.error(f"Inline teacher search error: {e}", exc_info=True)
+                )
+        else:
+            try:
+                teacher_lessons = await asyncio.wait_for(
+                    fetch_teacher_lessons(query), timeout=1.8
+                )
+                if teacher_lessons:
+                    by_teacher = {}
+                    for lesson in teacher_lessons:
+                        name = (lesson.get("teacher") or query).strip() or query
+                        by_teacher.setdefault(name, []).append(lesson)
+                    for teacher_name in sorted(by_teacher.keys())[:3]:
+                        if len(results) >= 8:
+                            break
+                        text_teach = _clip(_format_teacher_day(teacher_name, by_teacher[teacher_name], today))
+                        results.append(
+                            InlineQueryResultArticle(
+                                id=hashlib.md5(f"teach_net_{teacher_name}_{today.isoformat()}".encode()).hexdigest(),
+                                title=f"👨‍🏫 {teacher_name} — Сегодня",
+                                description=f"Расписание преподавателя {teacher_name} на сегодня",
+                                input_message_content=InputTextMessageContent(
+                                    message_text=text_teach,
+                                    parse_mode="HTML"
+                                )
+                            )
+                        )
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.debug(f"Quick teacher network search skipped/timed out: {e}")
 
     # 4. Никогда не отвечаем пустотой: иначе клиент показывает «нет результатов»
     # и кажется, что инлайн «не работает» (кейс @vyatsuts_bot Долженкова).
