@@ -176,34 +176,48 @@ def get_main_menu(user: User, bot_settings: dict = None) -> InlineKeyboardMarkup
 
 def get_schedule_hub_kb(
     group_name: str, 
+    current_date: Optional[date] = None,
     is_favorite: bool = False, 
     is_my_group: bool = False
 ) -> InlineKeyboardMarkup:
     today = date.today()
-    tmrw = today + timedelta(days=1)
-    after_tmrw = today + timedelta(days=2)
+    if current_date is None:
+        current_date = today
+
+    prev_d = current_date - timedelta(days=1)
+    next_d = current_date + timedelta(days=1)
 
     builder = InlineKeyboardBuilder()
 
+    # 1. Интерактивная карусель дней (Вчера | Сегодня | Завтра)
     builder.row(
-        InlineKeyboardButton(text="Сегодня", callback_data=ScheduleNav(action="day", current_date=today.isoformat(), group=group_name).pack()),
-        InlineKeyboardButton(text="Завтра", callback_data=ScheduleNav(action="day", current_date=tmrw.isoformat(), group=group_name).pack()),
-        InlineKeyboardButton(text="Послезавтра", callback_data=ScheduleNav(action="day", current_date=after_tmrw.isoformat(), group=group_name).pack())
+        InlineKeyboardButton(
+            text=f"◀️ {prev_d.strftime('%d.%m')}", 
+            callback_data=ScheduleNav(action="prev_day", current_date=current_date.isoformat(), group=group_name).pack()
+        ),
+        InlineKeyboardButton(
+            text="📅 Сегодня" if current_date != today else "• Сегодня •", 
+            callback_data=ScheduleNav(action="today", current_date=today.isoformat(), group=group_name).pack()
+        ),
+        InlineKeyboardButton(
+            text=f"{next_d.strftime('%d.%m')} ▶️", 
+            callback_data=ScheduleNav(action="next_day", current_date=current_date.isoformat(), group=group_name).pack()
+        )
     )
 
-    this_monday = today - timedelta(days=today.weekday())
-    week_buttons = []
-    for i in range(4):
-        mon = this_monday + timedelta(days=i*7)
-        sun = mon + timedelta(days=6)
-        text = f"{mon.strftime('%d.%m')} - {sun.strftime('%d.%m')} | Неделя"
-        week_buttons.append(InlineKeyboardButton(text=text, callback_data=ScheduleNav(action="week", current_date=mon.isoformat(), group=group_name).pack()))
+    # 2. Неделя и Календарь
+    builder.row(
+        InlineKeyboardButton(
+            text="📆 Вся неделя", 
+            callback_data=ScheduleNav(action="week", current_date=current_date.isoformat(), group=group_name).pack()
+        ),
+        InlineKeyboardButton(
+            text="🗓 Календарь", 
+            callback_data=ScheduleNav(action="custom_day", current_date=current_date.isoformat(), group=group_name).pack()
+        )
+    )
 
-    builder.row(week_buttons[0], week_buttons[1])
-    builder.row(week_buttons[2], week_buttons[3])
-
-    builder.row(InlineKeyboardButton(text="📅 Календарь на неделю", callback_data=ScheduleNav(action="custom_day", current_date=today.isoformat(), group=group_name).pack()))
-
+    # 3. Избранное и Основная группа
     action_btns = []
     if is_favorite:
         action_btns.append(InlineKeyboardButton(text="⭐ В избранном ❌", callback_data=GroupSelectCb(name=group_name, action="fav_remove_from_hub").pack()))
@@ -216,8 +230,9 @@ def get_schedule_hub_kb(
     if action_btns:
         builder.row(*action_btns)
 
+    # 4. Поиск и Главное меню
     builder.row(
-        InlineKeyboardButton(text="🔍 Другая группа", callback_data="search_start"),
+        InlineKeyboardButton(text="🔎 Другая группа", callback_data="search_start"),
         InlineKeyboardButton(text="« Главное меню", callback_data="cmd_start")
     )
     return builder.as_markup()
@@ -437,36 +452,36 @@ def get_teacher_schedule_hub_kb(
     xml_url: Optional[str] = None
 ) -> InlineKeyboardMarkup:
     today = date.today()
-    tmrw = today + timedelta(days=1)
-    after_tmrw = today + timedelta(days=2)
+    prev_d = current_date - timedelta(days=1)
+    next_d = current_date + timedelta(days=1)
 
     builder = InlineKeyboardBuilder()
 
-    # Быстрые кнопки: Сегодня, Завтра, Послезавтра
+    # 1. Интерактивная карусель дней (Вчера | Сегодня | Завтра)
     builder.row(
         InlineKeyboardButton(
-            text="Сегодня",
+            text=f"◀️ {prev_d.strftime('%d.%m')}",
+            callback_data=TeacherNav(action="day", target=teacher_id, date_val=prev_d.isoformat()).pack()
+        ),
+        InlineKeyboardButton(
+            text="📅 Сегодня" if current_date != today else "• Сегодня •",
             callback_data=TeacherNav(action="day", target=teacher_id, date_val=today.isoformat()).pack()
         ),
         InlineKeyboardButton(
-            text="Завтра",
-            callback_data=TeacherNav(action="day", target=teacher_id, date_val=tmrw.isoformat()).pack()
-        ),
-        InlineKeyboardButton(
-            text="Послезавтра",
-            callback_data=TeacherNav(action="day", target=teacher_id, date_val=after_tmrw.isoformat()).pack()
+            text=f"{next_d.strftime('%d.%m')} ▶️",
+            callback_data=TeacherNav(action="day", target=teacher_id, date_val=next_d.isoformat()).pack()
         )
     )
 
-    # Неделя и Календарь
+    # 2. Неделя и Календарь
     builder.row(
         InlineKeyboardButton(
             text="📆 Вся неделя",
-            callback_data=TeacherNav(action="week", target=teacher_id, date_val=today.isoformat()).pack()
+            callback_data=TeacherNav(action="week", target=teacher_id, date_val=current_date.isoformat()).pack()
         ),
         InlineKeyboardButton(
-            text="📅 Календарь на неделю",
-            callback_data=TeacherNav(action="cal", target=teacher_id, date_val=today.isoformat()).pack()
+            text="🗓 Календарь",
+            callback_data=TeacherNav(action="cal", target=teacher_id, date_val=current_date.isoformat()).pack()
         )
     )
 

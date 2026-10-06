@@ -105,7 +105,7 @@ async def show_schedule_for_group(
 
     await callback.message.edit_text(
         service.format_day(lessons, target_date, group_name, settings, is_predicted=is_predicted),
-        reply_markup=get_schedule_hub_kb(group_name, is_favorite=is_fav, is_my_group=is_my),
+        reply_markup=get_schedule_hub_kb(group_name, current_date=target_date, is_favorite=is_fav, is_my_group=is_my),
     )
 
 
@@ -166,7 +166,7 @@ async def navigate_schedule(
         try:
             await callback.message.edit_text(
                 text="\n\n".join(text_parts),
-                reply_markup=get_schedule_hub_kb(group, is_favorite=is_fav, is_my_group=is_my)
+                reply_markup=get_schedule_hub_kb(group, current_date=start_date, is_favorite=is_fav, is_my_group=is_my)
             )
         except TelegramBadRequest as e:
             if "message is not modified" in str(e):
@@ -192,7 +192,7 @@ async def navigate_schedule(
         try:
             await callback.message.edit_text(
                 text=service.format_day(lessons, target_date, group, settings, is_predicted=is_predicted),
-                reply_markup=get_schedule_hub_kb(group, is_favorite=is_fav, is_my_group=is_my)
+                reply_markup=get_schedule_hub_kb(group, current_date=target_date, is_favorite=is_fav, is_my_group=is_my)
             )
         except TelegramBadRequest as e:
             if "message is not modified" in str(e):
@@ -217,7 +217,7 @@ async def navigate_schedule(
             f"group: {callback_data.group}, date:{new_date}",
         )
     else:  # today
-        new_date = current
+        new_date = date.today()
         await analytics_repo.log_action(
             callback.from_user.id,
             f"schedule_nav_today",
@@ -231,7 +231,7 @@ async def navigate_schedule(
     try:
         await callback.message.edit_text(
             text=service.format_day(lessons, new_date, group, settings, is_predicted=is_predicted),
-            reply_markup=get_schedule_hub_kb(group, is_favorite=is_fav, is_my_group=is_my)
+            reply_markup=get_schedule_hub_kb(group, current_date=new_date, is_favorite=is_fav, is_my_group=is_my)
         )
     except TelegramBadRequest as e:
         if "message is not modified" in str(e):

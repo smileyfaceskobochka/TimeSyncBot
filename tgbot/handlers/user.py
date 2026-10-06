@@ -1,25 +1,26 @@
-from datetime import date
+from datetime import date, timedelta
 import logging
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
-from tgbot.config import config
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.types import InlineKeyboardButton
 from typing import Union
+from tgbot.config import config
 from tgbot.database.models import User
 from tgbot.database.repositories import (
     UserRepository,
     ScheduleRepository,
     AnalyticsRepository,
+    OccupancyRepository,
 )
 from tgbot.services.parser.runner import run_pipeline
 from tgbot.services.services import ScheduleService
 from tgbot.services.utils import parse_date
 from tgbot.states.states import RegState, FavState
-from tgbot.keyboards.inline import get_main_menu, get_group_selection_kb, get_schedule_hub_kb
+from tgbot.keyboards.inline import get_main_menu, get_group_selection_kb, get_schedule_hub_kb, get_user_settings_kb
+from tgbot.keyboards.reply import get_main_reply_kb
 from tgbot.keyboards.callback_data import GroupSelectCb
 from tgbot.services.rate_limiter import parser_rate_limiter
 
@@ -142,6 +143,11 @@ async def cmd_start(
         await user_repo.upsert_user(user)
         
     bot_settings = await user_repo.get_settings()
+    # Отправляем приветствие с постоянной клавиатурой под полем ввода
+    await message.answer(
+        "👋 Используйте кнопки внизу для быстрого доступа к расписанию:",
+        reply_markup=get_main_reply_kb()
+    )
     await show_main_menu(message, user, bot_settings, state)
 
 # ================= ОБРАБОТЧИК КОМАНДЫ /help =================
@@ -156,14 +162,113 @@ async def callback_cmd_help(callback: CallbackQuery, user_repo: UserRepository):
         await callback.message.edit_text(HELP_TEXT, reply_markup=get_main_menu(user, {}))
     except TelegramBadRequest as e:
         if "message is not modified" in str(e):
-            # Message already shows the help text, just acknowledge the click
             await callback.answer("ℹ️ Это справка о возможностях бота")
         else:
             raise
     else:
         await callback.answer()
 
-# ================= ОБРАБОТЧИК КНОПКИ "Главное меню" =================
+# ================= ОБРАБОТЧИКИ КНОПОК ПОД ПОЛЕМ ВВОДА (REPLY KEYBOARD) =================
+@user_router.message(F.text.in_({"📅 Сегодня", "📆 Завтра", "🗓 Неделя"}) | Command("today", "tomorrow", "week", "сегодня", "завтра", "неделя"))
+async def handle_quick_schedule_text(
+    message: Message,
+    user_repo: UserRepository,
+    schedule_repo: ScheduleRepository,
+    service: ScheduleService,
+    state: FSMContext,
+):
+    await state.clear()
+    user = await user_repo.get_user(message.from_user.id)
+    if not user or not user.group_name:
+        await state.set_state(RegState.search_group)
+        await message.answer(
+            "🔍 <b>У вас ещё не установлена основная группа.</b>\n\n"
+            "Введите название или часть названия вашей группы для поиска:\n"
+            "<i>Например: ИВТб-1301 или просто ИВТ</i>"
+        )
+        return
+
+    text = message.text.lower()
+    group_name = user.group_name
+    settings = user.settings if user else None
+    is_fav = bool(user and group_name in user.favorites)
+
+    if "завтра" in text or "tomorrow" in text:
+        target_date = date.today() + timedelta(days=1)
+        lessons, is_predicted = await schedule_repo.get_lessons_with_status(group_name, target_date)
+        day_text = service.format_day(lessons, target_date, group_name, settings, is_predicted=is_predicted)
+        await message.answer(
+            day_text,
+            reply_markup=get_schedule_hub_kb(group_name, current_date=target_date, is_favorite=is_fav, is_my_group=True)
+        )
+    elif "недел" in text or "week" in text:
+        today = date.today()
+        start_date = today - timedelta(days=today.weekday())
+        text_parts = [
+            f"📆 <b>Расписание на неделю ({start_date.strftime('%d.%m')} — {(start_date + timedelta(days=6)).strftime('%d.%m')})</b>\nГруппа: {group_name}\n"
+        ]
+        has_any = False
+        for i in range(7):
+            d = start_date + timedelta(days=i)
+            lessons, is_predicted = await schedule_repo.get_lessons_with_status(group_name, d)
+            if lessons:
+                has_any = True
+                text_parts.append(service.format_day(lessons, d, group_name, settings, is_predicted=is_predicted))
+        if not has_any:
+            text_parts.append("🎉 На эту неделю пар нет!")
+
+        await message.answer(
+            "\n\n".join(text_parts),
+            reply_markup=get_schedule_hub_kb(group_name, current_date=start_date, is_favorite=is_fav, is_my_group=True)
+        )
+    else:  # today
+        target_date = date.today()
+        lessons, is_predicted = await schedule_repo.get_lessons_with_status(group_name, target_date)
+        day_text = service.format_day(lessons, target_date, group_name, settings, is_predicted=is_predicted)
+        await message.answer(
+            day_text,
+            reply_markup=get_schedule_hub_kb(group_name, current_date=target_date, is_favorite=is_fav, is_my_group=True)
+        )
+
+@user_router.message(F.text == "🏢 Аудитории")
+async def handle_free_rooms_reply(message: Message, state: FSMContext, occupancy_repo: OccupancyRepository):
+    from tgbot.handlers.free_rooms import cmd_free_rooms
+    await cmd_free_rooms(message, state, occupancy_repo)
+
+@user_router.message(F.text == "👨‍🏫 Преподаватели")
+async def handle_teachers_reply(message: Message, state: FSMContext):
+    from tgbot.states.states import ScheduleState
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="« Главное меню", callback_data="cmd_start"))
+    await message.answer(
+        "🎓 <b>Поиск преподавателя</b>\n\n"
+        "Введите фамилию или ФИО преподавателя (например: <b>Иванов</b> или <b>Ливанова</b>):",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(ScheduleState.waiting_for_teacher)
+
+@user_router.message(F.text == "⭐ Избранное")
+async def handle_favorites_reply(message: Message, user_repo: UserRepository):
+    from tgbot.handlers.favorites import cmd_favorites
+    await cmd_favorites(message, user_repo)
+
+@user_router.message(F.text.in_({"🔎 Поиск группы", "🔎 Поиск"}))
+async def handle_search_reply(message: Message, state: FSMContext):
+    await cmd_search_start(message, state)
+
+@user_router.message(F.text == "⚙️ Настройки")
+async def handle_settings_reply(message: Message, user_repo: UserRepository):
+    user = await user_repo.get_user(message.from_user.id)
+    settings = user.settings if user and user.settings else None
+    await message.answer("⚙️ <b>Настройки отображения:</b>", reply_markup=get_user_settings_kb(settings))
+
+@user_router.message(F.text == "💬 Главное меню")
+async def handle_main_menu_reply(message: Message, user_repo: UserRepository, state: FSMContext):
+    user = await user_repo.get_user(message.from_user.id)
+    bot_settings = await user_repo.get_settings()
+    await show_main_menu(message, user, bot_settings, state)
+
+# ================= ОБРАБОТЧИК КНОПКИ "Главное меню" (ИНЛАЙН) =================
 @user_router.callback_query(F.data == "cmd_start")
 async def callback_cmd_start(
     callback: CallbackQuery,
