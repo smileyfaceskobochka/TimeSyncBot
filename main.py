@@ -119,15 +119,21 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     logging.info("✓ Signal handlers registered")
 
-    # Start Android Widget API Server
-    from aiohttp import web
-    from tgbot.api.server import setup_app
-    api_app = setup_app(db_manager)
-    api_runner = web.AppRunner(api_app)
-    await api_runner.setup()
-    api_site = web.TCPSite(api_runner, config.API_HOST, config.API_PORT)
-    await api_site.start()
-    logging.info(f"🌐 API server started on http://{config.API_HOST}:{config.API_PORT}")
+    # Start Android Widget API Server (FastAPI + Uvicorn)
+    import uvicorn
+    from tgbot.api.server import create_app
+    api_app = create_app(db_manager)
+    uvicorn_config = uvicorn.Config(
+        api_app,
+        host=config.API_HOST,
+        port=config.API_PORT,
+        log_level="info",
+        access_log=False,
+    )
+    uvicorn_server = uvicorn.Server(uvicorn_config)
+    uvicorn_server.install_signal_handlers = lambda: None
+    api_task = asyncio.create_task(uvicorn_server.serve())
+    logging.info(f"🌐 FastAPI server started on http://{config.API_HOST}:{config.API_PORT} (Docs: http://{config.API_HOST}:{config.API_PORT}/api/v1/docs)")
 
     # Setup contextual command menus and bot descriptions
     from tgbot.services.bot_commands import setup_bot_metadata
@@ -153,7 +159,8 @@ async def main():
         logging.info("Shutting down bot and API...")
         if parser_scheduler:
             parser_scheduler.stop()
-        await api_runner.cleanup()
+        uvicorn_server.should_exit = True
+        await api_task
         await bot.session.close()
         logging.info("Bot stopped successfully.")
 

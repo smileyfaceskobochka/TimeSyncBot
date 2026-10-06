@@ -32,7 +32,7 @@ RUN mkdir -p /app/data/pdf /app/data/temp /app/logs
 
 # Health check (verify bot and API server are responding)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health || exit 1
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
 # Entrypoint
 ENTRYPOINT ["/app/docker/entrypoint.sh"]

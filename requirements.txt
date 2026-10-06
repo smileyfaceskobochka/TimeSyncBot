@@ -16,8 +16,12 @@ aiosignal==1.4.0
     # via aiohttp
 aiosqlite==0.22.1
     # via timesyncbot (pyproject.toml)
+annotated-doc==0.0.5
+    # via fastapi
 annotated-types==0.8.0
     # via pydantic
+anyio==4.15.1
+    # via starlette
 apscheduler==3.11.3
     # via timesyncbot (pyproject.toml)
 attrs==26.1.0
@@ -30,22 +34,32 @@ cffi==2.1.1
     # via cryptography
 charset-normalizer==3.5.1
     # via pdfminer-six
+click==8.5.0
+    # via uvicorn
 cryptography==50.0.1
     # via pdfminer-six
+fastapi==0.142.2
+    # via timesyncbot (pyproject.toml)
 frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
 greenlet==3.5.6
     # via sqlalchemy
+h11==0.16.0
+    # via uvicorn
 idna==3.20
-    # via yarl
+    # via
+    #   anyio
+    #   yarl
 magic-filter==1.0.12
     # via aiogram
 multidict==6.9.1
     # via
     #   aiohttp
     #   yarl
+opentelemetry-api==1.45.0
+    # via fastapi
 pdfminer-six==20260107
     # via pdfplumber
 pdfplumber==0.11.10
@@ -62,6 +76,7 @@ pydantic==2.13.5
     # via
     #   timesyncbot (pyproject.toml)
     #   aiogram
+    #   fastapi
     #   pydantic-settings
     #   sqlmodel
 pydantic-core==2.46.5
@@ -84,10 +99,15 @@ sqlalchemy==2.0.54
     #   sqlmodel
 sqlmodel==0.0.46
     # via timesyncbot (pyproject.toml)
+starlette==1.7.0
+    # via fastapi
 typing-extensions==4.16.0
     # via
     #   aiogram
+    #   anyio
     #   beautifulsoup4
+    #   fastapi
+    #   opentelemetry-api
     #   pydantic
     #   pydantic-core
     #   sqlalchemy
@@ -95,9 +115,12 @@ typing-extensions==4.16.0
     #   typing-inspection
 typing-inspection==0.4.4
     # via
+    #   fastapi
     #   pydantic
     #   pydantic-settings
 tzlocal==5.4.4
     # via apscheduler
+uvicorn==0.54.0
+    # via timesyncbot (pyproject.toml)
 yarl==1.25.1
     # via aiohttp

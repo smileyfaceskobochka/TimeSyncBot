@@ -31,6 +31,16 @@ class Settings(BaseSettings):
     # API server configurations
     API_HOST: str = Field(default="0.0.0.0")
     API_PORT: int = Field(default=8000)
+    api_keys_raw: str = Field(default="", alias="API_KEYS")
+    API_RATE_LIMIT_PUBLIC: int = Field(default=60)   # req / min for anonymous clients
+    API_RATE_LIMIT_AUTH: int = Field(default=300)    # req / min for authenticated clients
+
+    @property
+    def API_KEYS(self) -> List[str]:
+        """Parse allowed API keys from environment variable (comma-separated)."""
+        if not self.api_keys_raw:
+            return []
+        return [k.strip() for k in self.api_keys_raw.split(",") if k.strip()]
     
     # Database paths
     @property

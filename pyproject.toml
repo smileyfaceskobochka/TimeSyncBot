@@ -18,6 +18,8 @@ dependencies = [
     "sqlalchemy>=2.0.35",
     "pymupdf>=1.25.3",
     "pdfplumber>=0.11.0",
+    "uvicorn>=0.54.0",
+    "fastapi>=0.142.2",
 ]
 
 [build-system]
