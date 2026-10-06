@@ -195,12 +195,12 @@ async def teacher_search_surname(message: Message, state: FSMContext, user_repo:
         user = await user_repo.get_user(message.from_user.id)
         is_fav = bool(user and single_name in user.favorite_teachers)
 
-        dept_name = teacher_mapping_manager.get_teacher_department(single_name)
+        dept_names = teacher_mapping_manager.get_teacher_departments(single_name) or [teacher_mapping_manager.get_teacher_department(single_name)]
         rep = teacher_mapping_manager.get_teacher_report_for_date(single_name, today)
         html_url = rep.get("html_url") if rep else None
         xml_url = rep.get("xml_url") if rep else None
 
-        text = _format_teacher_day(single_name, lessons, today, dept_name=dept_name)
+        text = _format_teacher_day(single_name, lessons, today, dept_name=dept_names)
         await message.answer(
             text, 
             reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav, html_url=html_url, xml_url=xml_url),
@@ -236,12 +236,12 @@ async def teacher_view_selected(
     user = await user_repo.get_user(callback.from_user.id)
     is_fav = bool(user and teacher_name in user.favorite_teachers)
 
-    dept_name = teacher_mapping_manager.get_teacher_department(teacher_name)
+    dept_names = teacher_mapping_manager.get_teacher_departments(teacher_name) or [teacher_mapping_manager.get_teacher_department(teacher_name)]
     rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, today)
     html_url = rep.get("html_url") if rep else None
     xml_url = rep.get("xml_url") if rep else None
 
-    text = _format_teacher_day(teacher_name, lessons, today, dept_name=dept_name)
+    text = _format_teacher_day(teacher_name, lessons, today, dept_name=dept_names)
     await callback.message.edit_text(
         text, 
         reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav, html_url=html_url, xml_url=xml_url),
@@ -279,12 +279,12 @@ async def teacher_nav_day(
     lessons = await teacher_mapping_manager.fetch_teacher_lessons(teacher_name, target_date)
     is_fav = bool(user and teacher_name in user.favorite_teachers)
 
-    dept_name = teacher_mapping_manager.get_teacher_department(teacher_name)
+    dept_names = teacher_mapping_manager.get_teacher_departments(teacher_name) or [teacher_mapping_manager.get_teacher_department(teacher_name)]
     rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, target_date)
     html_url = rep.get("html_url") if rep else None
     xml_url = rep.get("xml_url") if rep else None
 
-    text = _format_teacher_day(teacher_name, lessons, target_date, dept_name=dept_name)
+    text = _format_teacher_day(teacher_name, lessons, target_date, dept_name=dept_names)
     await callback.message.edit_text(
         text, 
         reply_markup=get_teacher_schedule_hub_kb(teacher_id, target_date, is_favorite=is_fav, html_url=html_url, xml_url=xml_url),
@@ -334,12 +334,12 @@ async def teacher_nav_week(
         target_date = date.today()
 
     lessons = await teacher_mapping_manager.fetch_teacher_lessons(teacher_name, target_date)
-    dept_name = teacher_mapping_manager.get_teacher_department(teacher_name)
+    dept_names = teacher_mapping_manager.get_teacher_departments(teacher_name) or [teacher_mapping_manager.get_teacher_department(teacher_name)]
     rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, target_date)
     html_url = rep.get("html_url") if rep else None
     xml_url = rep.get("xml_url") if rep else None
 
-    chunks = _format_teacher_schedule_chunks(teacher_name, lessons, dept_name=dept_name)
+    chunks = _format_teacher_schedule_chunks(teacher_name, lessons, dept_name=dept_names)
 
     if len(chunks) == 1:
         try:
@@ -387,23 +387,31 @@ async def teacher_nav_curriculum(
         current_date = date.today()
 
     curriculum = teacher_mapping_manager.get_teacher_curriculum(teacher_name)
-    dept_name = teacher_mapping_manager.get_teacher_department(teacher_name) or "Кафедра"
+    dept_names = teacher_mapping_manager.get_teacher_departments(teacher_name)
+    dept_header = f"🏛 <b>Кафедры:</b> {', '.join(dept_names)}" if len(dept_names) > 1 else (f"🏛 <b>Кафедра:</b> {dept_names[0]}" if dept_names else "")
 
     lines = [
         f"👨‍🏫 Преподаватель: <b>{teacher_name}</b>",
-        f"🏛 <b>Кафедра:</b> {dept_name}",
+    ]
+    if dept_header:
+        lines.append(dept_header)
+    lines.extend([
         "",
         "📑 <b>Учебный план (официальные отчеты HTML и XML/XLS):</b>",
         "<i>Нажмите на ссылку для просмотра или скачивания:</i>\n"
-    ]
+    ])
 
     if not curriculum:
         lines.append("<i>Учебный план не найден.</i>")
     else:
+        # Group by department if multiple departments
+        # Sort so current active periods are highlighted
+        cur_items = []
         for rep in curriculum:
             p_text = rep.get("period") or "Период"
             h_url = rep.get("html_url") or rep.get("url")
             x_url = rep.get("xml_url")
+            d_name = rep.get("department") or ""
 
             is_active = False
             s_str = rep.get("start_date")
@@ -427,13 +435,25 @@ async def teacher_nav_curriculum(
                 parts.append(f'<a href="{x_url}">XML/XLS</a>')
             links_str = " | ".join(parts) if parts else ""
 
-            lines.append(f"{marker}{p_text}{close_tag} — [{links_str}]")
+            dept_badge = f" <i>({d_name.split()[1] if len(d_name.split()) > 1 else d_name[:15]})</i>" if len(dept_names) > 1 else ""
+            line_str = f"{marker}{p_text}{dept_badge}{close_tag} — [{links_str}]"
+            cur_items.append((is_active, s_str or "", line_str))
+
+        # Show active periods first, and ensure total text does not exceed 3800 chars
+        cur_items.sort(key=lambda x: (not x[0], x[1]))
+        total_len = sum(len(l) for l in lines)
+        for _, _, l_str in cur_items:
+            if total_len + len(l_str) + 2 > 3800:
+                lines.append(f"\n<i>... и еще {len(cur_items) - len(lines) + 4} периодов в базе.</i>")
+                break
+            lines.append(l_str)
+            total_len += len(l_str) + 1
 
     text = "\n".join(lines)
     await callback.message.edit_text(
         text,
         reply_markup=get_teacher_curriculum_kb(teacher_id, current_date),
-        disable_web_page_preview=True
+        link_preview_options=LinkPreviewOptions(is_disabled=True)
     )
     await callback.answer()
 
@@ -601,7 +621,14 @@ def _format_teacher_day(teacher_name: str, lessons: List[dict], target_date: dat
 
     lines = [f"👨‍🏫 Преподаватель: <b>{teacher_name}</b>"]
     if dept_name:
-        lines.append(f"🏛 <b>Кафедра:</b> {dept_name}")
+        if isinstance(dept_name, (list, set, tuple)):
+            clean_depts = [d for d in dept_name if d]
+            if len(clean_depts) > 1:
+                lines.append(f"🏛 <b>Кафедры:</b> {', '.join(clean_depts)}")
+            elif clean_depts:
+                lines.append(f"🏛 <b>Кафедра:</b> {clean_depts[0]}")
+        else:
+            lines.append(f"🏛 <b>Кафедра:</b> {dept_name}")
     lines.append(f"📅 <b>{header_date}</b>")
 
     if not day_lessons:
@@ -686,7 +713,14 @@ def _format_teacher_schedule_chunks(
     chunks: List[str] = []
     curr = f"👨‍🏫 Преподаватель: <b>{teacher_name}</b>\n"
     if dept_name:
-        curr += f"🏛 <b>Кафедра:</b> {dept_name}\n"
+        if isinstance(dept_name, (list, set, tuple)):
+            clean_depts = [d for d in dept_name if d]
+            if len(clean_depts) > 1:
+                curr += f"🏛 <b>Кафедры:</b> {', '.join(clean_depts)}\n"
+            elif clean_depts:
+                curr += f"🏛 <b>Кафедра:</b> {clean_depts[0]}\n"
+        else:
+            curr += f"🏛 <b>Кафедра:</b> {dept_name}\n"
     curr += "\n"
 
     for block in day_blocks:

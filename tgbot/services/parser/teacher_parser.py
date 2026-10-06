@@ -585,6 +585,16 @@ class TeacherMappingManager:
             return next(iter(depts))
         return None
 
+    def get_teacher_departments(self, teacher_name: str) -> List[str]:
+        """Returns all department names for a teacher."""
+        depts = self._teacher_to_depts.get(teacher_name)
+        if depts:
+            return sorted(list(depts))
+        for t, d_set in self._teacher_to_depts.items():
+            if t.lower() == teacher_name.lower():
+                return sorted(list(d_set))
+        return []
+
     def get_teacher_curriculum(self, teacher_name: str) -> List[Dict]:
         """Returns the list of all curriculum reports (HTML and XML/XLS) for a teacher."""
         if teacher_name in self._teacher_to_reports:
@@ -594,29 +604,69 @@ class TeacherMappingManager:
                 return reps
         return []
 
-    def get_teacher_report_for_date(self, teacher_name: str, target_date: date) -> Optional[Dict]:
-        """Finds the curriculum report (HTML and XML) for a teacher that covers target_date."""
+    def get_teacher_reports_for_date(self, teacher_name: str, target_date: date) -> List[Dict]:
+        """Returns ALL distinct curriculum reports for a teacher that cover target_date.
+
+        A teacher may belong to several departments, so several reports can be
+        simultaneously valid for the same date.
+        """
         curriculum = self.get_teacher_curriculum(teacher_name)
         if not curriculum:
-            return None
+            return []
 
-        for rep in curriculum:
+        def _covers(rep: Dict) -> bool:
             s_str = rep.get("start_date")
             e_str = rep.get("end_date")
             if s_str and e_str:
                 try:
                     s_d = date.fromisoformat(s_str)
                     e_d = date.fromisoformat(e_str)
-                    if s_d <= target_date <= e_d:
-                        return rep
                 except ValueError:
-                    pass
+                    return False
             else:
                 s_d, e_d = parse_period_dates(rep.get("period", ""))
-                if s_d and e_d and s_d <= target_date <= e_d:
-                    return rep
+            return bool(s_d and e_d and s_d <= target_date <= e_d)
 
-        return curriculum[0] if curriculum else None
+        matching: List[Dict] = []
+        seen = set()
+        for rep in curriculum:
+            key = (rep.get("department"), rep.get("html_url"))
+            if key in seen:
+                continue
+            if _covers(rep):
+                seen.add(key)
+                matching.append(rep)
+
+        if matching:
+            return matching
+
+        # Fallback: one report per department, or all unique reports.
+        by_dept: Dict[Optional[str], Dict] = {}
+        seen = set()
+        for rep in curriculum:
+            key = (rep.get("department"), rep.get("html_url"))
+            if key in seen:
+                continue
+            seen.add(key)
+            by_dept.setdefault(rep.get("department"), rep)
+
+        if by_dept:
+            return list(by_dept.values())
+
+        unique: List[Dict] = []
+        seen = set()
+        for rep in curriculum:
+            key = (rep.get("department"), rep.get("html_url"))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(rep)
+        return unique
+
+    def get_teacher_report_for_date(self, teacher_name: str, target_date: date) -> Optional[Dict]:
+        """Finds the primary curriculum report (HTML and XML) for a teacher covering target_date."""
+        reports = self.get_teacher_reports_for_date(teacher_name, target_date)
+        return reports[0] if reports else None
 
     async def fetch_teacher_lessons(self, teacher_name: str, target_date: Optional[date] = None) -> List[dict]:
         """
@@ -638,45 +688,67 @@ class TeacherMappingManager:
         if not self.is_mapped():
             await self.ensure_mapping()
 
-        # 3. Find target curriculum report for this teacher
-        rep = self.get_teacher_report_for_date(teacher_name, target_date)
-        if rep and rep.get("html_url"):
-            url = rep["html_url"]
-            dept_name = rep.get("department") or self.get_teacher_department(teacher_name) or ""
-            
-            lessons = self._report_lessons_cache.get(url)
-            if not lessons:
-                try:
-                    async with aiohttp.ClientSession(headers=config.HTTP_HEADERS) as session:
-                        async with session.get(url, timeout=12) as resp:
-                            if resp.status == 200:
-                                html = await resp.read()
-                                lessons = parse_teacher_html_report(html, dept_name)
-                                self._report_lessons_cache[url] = lessons
-                except Exception as e:
-                    logging.debug(f"Error fetching specific report for {teacher_name}: {e}")
+        # 3. Find ALL target curriculum reports for this teacher (a teacher may
+        #    belong to several departments and thus have several reports)
+        reps = [
+            rep for rep in self.get_teacher_reports_for_date(teacher_name, target_date)
+            if rep and rep.get("html_url")
+        ]
+        if reps:
+            default_dept = self.get_teacher_department(teacher_name) or ""
 
-            if lessons:
-                matched = [l for l in lessons if l.teacher and teacher_name.lower() in l.teacher.lower()]
+            async with aiohttp.ClientSession(
+                headers=config.HTTP_HEADERS,
+                connector=aiohttp.TCPConnector(limit=30)
+            ) as session:
+
+                async def fetch_report(rep: Dict) -> Tuple[str, List[Lesson]]:
+                    url = rep["html_url"]
+                    dept_name = rep.get("department") or default_dept
+
+                    lessons = self._report_lessons_cache.get(url)
+                    if not lessons:
+                        try:
+                            async with session.get(url, timeout=12) as resp:
+                                if resp.status == 200:
+                                    html = await resp.read()
+                                    lessons = parse_teacher_html_report(html, dept_name)
+                                    self._report_lessons_cache[url] = lessons
+                        except Exception as e:
+                            logging.debug(f"Error fetching specific report for {teacher_name}: {e}")
+
+                    matched = [
+                        l for l in (lessons or [])
+                        if l.teacher and teacher_name.lower() in l.teacher.lower()
+                    ]
+                    return dept_name, matched
+
+                results = await asyncio.gather(*(fetch_report(rep) for rep in reps))
+
+            all_lessons = [l for _, matched in results for l in matched]
+            if all_lessons:
                 formatted = []
                 seen_keys = set()
-                for l in matched:
+                for l in all_lessons:
                     key = (l.date, l.pair_number, l.start_time, l.subject, l.class_type, l.room, l.group_name)
-                    if key not in seen_keys:
-                        seen_keys.add(key)
-                        formatted.append({
-                            "date": l.date,
-                            "pair_number": l.pair_number,
-                            "start_time": l.start_time,
-                            "end_time": l.end_time,
-                            "subject": l.subject,
-                            "class_type": l.class_type,
-                            "building": l.building,
-                            "room": l.room,
-                            "groups": l.group_name,
-                            "raw_info": l.raw_info,
-                            "teacher": l.teacher,
-                        })
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    formatted.append({
+                        "date": l.date,
+                        "pair_number": l.pair_number,
+                        "start_time": l.start_time,
+                        "end_time": l.end_time,
+                        "subject": l.subject,
+                        "class_type": l.class_type,
+                        "building": l.building,
+                        "room": l.room,
+                        "groups": l.group_name,
+                        "group_name": l.group_name,
+                        "raw_info": l.raw_info,
+                        "teacher": l.teacher,
+                    })
+                formatted.sort(key=lambda x: (x["date"] or "", x["pair_number"] or 0))
                 self._teacher_lessons_cache[teacher_name] = (now, formatted)
                 return formatted
 
