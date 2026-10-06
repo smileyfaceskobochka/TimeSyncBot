@@ -410,17 +410,32 @@ def get_teachers_selection_kb(teachers: List[str]) -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="« Главное меню", callback_data="cmd_start"))
     return builder.as_markup()
 
-def get_teacher_schedule_kb(teacher_id: str = "") -> InlineKeyboardMarkup:
+def get_teacher_schedule_kb(teacher_id: str = "", html_url: Optional[str] = None, xml_url: Optional[str] = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if teacher_id:
         today_iso = date.today().isoformat()
         builder.button(text="« К выбору дня", callback_data=TeacherNav(action="day", target=teacher_id, date_val=today_iso).pack())
+
+    doc_buttons = []
+    if html_url:
+        doc_buttons.append(InlineKeyboardButton(text="🌐 Отчет HTML", url=html_url))
+    if xml_url:
+        doc_buttons.append(InlineKeyboardButton(text="📊 XML/XLS", url=xml_url))
+    if doc_buttons:
+        builder.row(*doc_buttons)
+
     builder.button(text="🔍 Искать другого преподавателя", callback_data=TeacherNav(action="start").pack())
     builder.button(text="« Главное меню", callback_data="cmd_start")
     builder.adjust(1)
     return builder.as_markup()
 
-def get_teacher_schedule_hub_kb(teacher_id: str, current_date: date, is_favorite: bool = False) -> InlineKeyboardMarkup:
+def get_teacher_schedule_hub_kb(
+    teacher_id: str, 
+    current_date: date, 
+    is_favorite: bool = False,
+    html_url: Optional[str] = None,
+    xml_url: Optional[str] = None
+) -> InlineKeyboardMarkup:
     today = date.today()
     tmrw = today + timedelta(days=1)
     after_tmrw = today + timedelta(days=2)
@@ -455,6 +470,23 @@ def get_teacher_schedule_hub_kb(teacher_id: str, current_date: date, is_favorite
         )
     )
 
+    # Официальные ссылки на HTML и XML/XLS отчеты
+    doc_buttons = []
+    if html_url:
+        doc_buttons.append(InlineKeyboardButton(text="🌐 Отчет HTML", url=html_url))
+    if xml_url:
+        doc_buttons.append(InlineKeyboardButton(text="📊 XML/XLS", url=xml_url))
+    if doc_buttons:
+        builder.row(*doc_buttons)
+
+    # Учебный план (все периоды)
+    builder.row(
+        InlineKeyboardButton(
+            text="📑 Учебный план (все периоды)",
+            callback_data=TeacherNav(action="curr", target=teacher_id, date_val=current_date.isoformat()).pack()
+        )
+    )
+
     # Избранное
     fav_text = "⭐ В избранном ❌" if is_favorite else "☆ В избранное"
     builder.row(
@@ -469,6 +501,17 @@ def get_teacher_schedule_hub_kb(teacher_id: str, current_date: date, is_favorite
         InlineKeyboardButton(text="🔍 Другой преподаватель", callback_data=TeacherNav(action="start").pack()),
         InlineKeyboardButton(text="« Главное меню", callback_data="cmd_start")
     )
+    return builder.as_markup()
+
+def get_teacher_curriculum_kb(teacher_id: str, current_date: date) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="« К расписанию", 
+        callback_data=TeacherNav(action="day", target=teacher_id, date_val=current_date.isoformat()).pack()
+    )
+    builder.button(text="🔍 Другой преподаватель", callback_data=TeacherNav(action="start").pack())
+    builder.button(text="« Главное меню", callback_data="cmd_start")
+    builder.adjust(1)
     return builder.as_markup()
 
 def get_teacher_calendar_kb(teacher_id: str, current_date: date) -> InlineKeyboardMarkup:

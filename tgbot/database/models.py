@@ -99,6 +99,18 @@ class ProcessedFile(SQLModel, table=True):
     last_updated: str = Field(default_factory=lambda: date.today().isoformat())
     file_type: Optional[str] = None
 
+class TeacherCurriculum(SQLModel, table=True):
+    __tablename__ = "teacher_curriculum"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    teacher: str = Field(index=True)
+    department: str = Field(index=True)
+    period: str = Field()
+    start_date: Optional[str] = Field(default=None, index=True)
+    end_date: Optional[str] = Field(default=None, index=True)
+    html_url: str = Field()
+    xml_url: Optional[str] = Field(default=None)
+    last_updated: str = Field(default_factory=lambda: date.today().isoformat())
+
 class BotSetting(SQLModel, table=True):
     __tablename__ = "bot_settings"
     key: str = Field(primary_key=True)

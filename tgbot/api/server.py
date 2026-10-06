@@ -72,6 +72,37 @@ async def handle_get_schedule(request: web.Request) -> web.Response:
     return web.json_response({"group": group_name, "start_date": date_str, "schedule": schedule_days})
 
 
+async def handle_teachers_search(request: web.Request) -> web.Response:
+    query = request.rel_url.query.get("q", "").strip()
+    if not query:
+        return web.json_response({"error": "Missing 'q' query parameter"}, status=400)
+
+    from tgbot.services.parser.teacher_parser import teacher_mapping_manager
+    if not teacher_mapping_manager.is_mapped():
+        await teacher_mapping_manager.ensure_mapping()
+    results = teacher_mapping_manager.search_teachers(query)
+    return web.json_response({"results": results, "count": len(results)})
+
+
+async def handle_get_teacher_curriculum(request: web.Request) -> web.Response:
+    teacher_name = request.match_info.get("teacher_name", "").strip()
+    if not teacher_name:
+        return web.json_response({"error": "Missing teacher_name"}, status=400)
+
+    from tgbot.services.parser.teacher_parser import teacher_mapping_manager
+    if not teacher_mapping_manager.is_mapped():
+        await teacher_mapping_manager.ensure_mapping()
+
+    dept = teacher_mapping_manager.get_teacher_department(teacher_name)
+    curriculum = teacher_mapping_manager.get_teacher_curriculum(teacher_name)
+    return web.json_response({
+        "teacher": teacher_name,
+        "department": dept,
+        "curriculum": curriculum,
+        "count": len(curriculum)
+    })
+
+
 def setup_app(db: DatabaseManager) -> web.Application:
     global _db_manager
     _db_manager = db
@@ -81,6 +112,8 @@ def setup_app(db: DatabaseManager) -> web.Application:
         web.get("/api/health", handle_health),
         web.get("/api/groups/search", handle_groups_search),
         web.get("/api/schedule/{group_name}", handle_get_schedule),
+        web.get("/api/teachers/search", handle_teachers_search),
+        web.get("/api/teachers/{teacher_name}/curriculum", handle_get_teacher_curriculum),
     ])
-    logging.info("✅ API routes registered: /api/health, /api/groups/search, /api/schedule/{group_name}")
+    logging.info("✅ API routes registered: /api/health, /api/groups/search, /api/schedule/{group_name}, /api/teachers/search, /api/teachers/{teacher_name}/curriculum")
     return app

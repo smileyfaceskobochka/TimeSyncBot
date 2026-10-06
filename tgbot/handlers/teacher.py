@@ -23,12 +23,14 @@ from tgbot.keyboards.inline import (
     get_teacher_schedule_kb,
     get_teacher_schedule_hub_kb,
     get_teacher_calendar_kb,
+    get_teacher_curriculum_kb,
     get_main_menu,
 )
 from tgbot.services.parser.teacher_parser import (
     get_teacher_navigation_data,
     find_active_teacher_reports,
     parse_teacher_html_report,
+    teacher_mapping_manager,
 )
 from tgbot.services.parser.progress import ProgressReporter
 
@@ -85,66 +87,12 @@ async def get_cached_nav():
     return _nav_cache
 
 
-async def fetch_teacher_lessons(teacher_name: str) -> List[dict]:
-    """Fetches and deduplicates all lessons for a teacher from VyatSU active reports."""
-    now = time.time()
-    if teacher_name in _teacher_lessons_cache:
-        timestamp, cached = _teacher_lessons_cache[teacher_name]
-        if (now - timestamp) < TEACHER_CACHE_TTL:
-            return cached
-
-    nav_data = await get_cached_nav()
-    if not nav_data:
-        return []
-
-    active_reports = find_active_teacher_reports(nav_data)
-    if not active_reports:
-        return []
-
-    sem = asyncio.Semaphore(25)
-    async with aiohttp.ClientSession(
-        headers=config.HTTP_HEADERS,
-        connector=aiohttp.TCPConnector(limit=30)
-    ) as session:
-        async def fetch_dept(dept_name: str, url: str) -> List[Lesson]:
-            async with sem:
-                try:
-                    async with session.get(url, timeout=12) as resp:
-                        if resp.status == 200:
-                            html_data = await resp.read()
-                            lessons = parse_teacher_html_report(html_data, dept_name)
-                            return [l for l in lessons if (l.teacher and teacher_name.lower() in l.teacher.lower())]
-                except Exception as e:
-                    logging.debug(f"Error fetching teacher report for {dept_name}: {e}")
-                return []
-
-        tasks = [fetch_dept(dept_name, url) for dept_name, url in active_reports]
-        batch_results = await asyncio.gather(*tasks)
-
-    all_lessons = [lesson for sublist in batch_results for lesson in sublist]
-    seen_keys = set()
-    formatted = []
-    for l in all_lessons:
-        key = (l.date, l.pair_number, l.start_time, l.subject, l.class_type, l.room, l.group_name)
-        if key not in seen_keys:
-            seen_keys.add(key)
-            formatted.append({
-                "date": l.date,
-                "pair_number": l.pair_number,
-                "start_time": l.start_time,
-                "end_time": l.end_time,
-                "subject": l.subject,
-                "class_type": l.class_type,
-                "building": l.building,
-                "room": l.room,
-                "groups": l.group_name,
-                "raw_info": l.raw_info,
-                "teacher": l.teacher,
-            })
-
-    _teacher_lessons_cache[teacher_name] = (now, formatted)
+async def fetch_teacher_lessons(teacher_name: str, target_date: Optional[date] = None) -> List[dict]:
+    """Fetches and deduplicates all lessons for a teacher using dynamic curriculum mapping."""
+    lessons = await teacher_mapping_manager.fetch_teacher_lessons(teacher_name, target_date)
     get_teacher_id(teacher_name)
-    return formatted
+    _teacher_lessons_cache[teacher_name] = (time.time(), lessons)
+    return lessons
 
 
 # ================= СТАРТ ПОИСКА ПРЕПОДАВАТЕЛЯ =================
@@ -193,105 +141,61 @@ async def teacher_search_surname(message: Message, state: FSMContext, user_repo:
         return await message.answer("⚠️ Введите хотя бы 3 буквы фамилии для поиска.")
 
     progress = ProgressReporter(message)
-    await progress.report(f"🔎 Ищу преподавателя <b>{query}</b> по всем кафедрам университета...", 0.1)
 
     try:
-        nav_data = await get_cached_nav()
-        if not nav_data:
-            return await message.answer("❌ Не удалось получить данные о кафедрах. Попробуйте позже.")
+        # 1. Если карта еще не построена — выполняем динамическую инициализацию (после первого поиска)
+        if not teacher_mapping_manager.is_mapped():
+            await progress.report(f"⏳ Первая инициализация карты преподавателей и учебных планов...", 0.15)
+            ok = await teacher_mapping_manager.ensure_mapping(progress=progress)
+            if not ok:
+                return await message.answer("❌ Не удалось получить данные о кафедрах. Попробуйте позже.")
+        else:
+            await progress.report(f"🔎 Ищу преподавателя <b>{query}</b>...", 0.2)
 
-        active_reports = find_active_teacher_reports(nav_data)
-        if not active_reports:
-            return await message.answer("⚠️ Не удалось найти расписание преподавателей на текущую неделю.")
+        # 2. Ищем преподавателя в динамической карте
+        matched_teachers = teacher_mapping_manager.search_teachers(query)
 
-        await progress.report(f"⏳ Сканирую {len(active_reports)} кафедр ВятГУ...", 0.3)
-
-        sem = asyncio.Semaphore(25)
-        async with aiohttp.ClientSession(
-            headers=config.HTTP_HEADERS,
-            connector=aiohttp.TCPConnector(limit=30)
-        ) as session:
-            async def fetch_dept(dept_name: str, url: str) -> List[Lesson]:
-                async with sem:
-                    try:
-                        async with session.get(url, timeout=12) as resp:
-                            if resp.status == 200:
-                                html_data = await resp.read()
-                                lessons = parse_teacher_html_report(html_data, dept_name)
-                                return [l for l in lessons if surname in (l.teacher or "").lower()]
-                    except Exception as e:
-                        logging.debug(f"Error fetching teacher report for {dept_name}: {e}")
-                    return []
-
-            tasks = [fetch_dept(dept_name, url) for dept_name, url in active_reports]
-            batch_results = await asyncio.gather(*tasks)
-
-        all_teacher_lessons = [lesson for sublist in batch_results for lesson in sublist]
-
-        if not all_teacher_lessons:
+        if not matched_teachers:
             builder = InlineKeyboardBuilder()
             builder.button(text="🔍 Искать снова", callback_data=TeacherNav(action="start").pack())
             builder.button(text="« Главное меню", callback_data="cmd_start")
             builder.adjust(1)
             return await message.answer(
-                f"❌ Преподаватель с фамилией '<b>{query}</b>' не найден в расписании текущей недели.\n\n"
+                f"❌ Преподаватель с фамилией '<b>{query}</b>' не найден в базе университета.\n\n"
                 "Попробуйте ввести фамилию точнее.",
                 reply_markup=builder.as_markup()
             )
 
-        # Группируем найденные уроки по полному имени преподавателя с дедупликацией
-        teachers_found: Dict[str, List[dict]] = {}
-        seen_keys = set()
-        for l in all_teacher_lessons:
-            if not l.teacher:
-                continue
-            if l.teacher not in teachers_found:
-                teachers_found[l.teacher] = []
-
-            key = (l.teacher, l.date, l.pair_number, l.start_time, l.subject, l.class_type, l.room, l.group_name)
-            if key not in seen_keys:
-                seen_keys.add(key)
-                teachers_found[l.teacher].append({
-                    "date": l.date,
-                    "pair_number": l.pair_number,
-                    "start_time": l.start_time,
-                    "end_time": l.end_time,
-                    "subject": l.subject,
-                    "class_type": l.class_type,
-                    "building": l.building,
-                    "room": l.room,
-                    "groups": l.group_name,
-                    "raw_info": l.raw_info,
-                })
-
-        teacher_names = sorted(list(teachers_found.keys()))
-
-        # Регистрируем в ID-реестре и кэше
-        for name in teacher_names:
+        for name in matched_teachers:
             get_teacher_id(name)
-            _teacher_lessons_cache[name] = (time.time(), teachers_found[name])
 
-        # Если найдено несколько преподавателей — даём выбор
-        if len(teacher_names) > 1:
-            await state.update_data(teacher_results=teachers_found, teacher_names=teacher_names)
+        # 3. Если найдено несколько — даём выбор
+        if len(matched_teachers) > 1:
+            await state.update_data(teacher_names=matched_teachers)
             return await message.answer(
                 f"🔎 Найдено несколько преподавателей по запросу '<b>{query}</b>':\n"
                 "Выберите нужного из списка:",
-                reply_markup=get_teachers_selection_kb(teacher_names)
+                reply_markup=get_teachers_selection_kb(matched_teachers)
             )
 
-        # Если найден ровно один — открываем расписание на СЕГОДНЯ в интерактивном хабе
-        single_name = teacher_names[0]
+        # 4. Если ровно один — открываем расписание на СЕГОДНЯ
+        single_name = matched_teachers[0]
         teacher_id = get_teacher_id(single_name)
         today = date.today()
 
+        lessons = await teacher_mapping_manager.fetch_teacher_lessons(single_name, today)
         user = await user_repo.get_user(message.from_user.id)
         is_fav = bool(user and single_name in user.favorite_teachers)
 
-        text = _format_teacher_day(single_name, teachers_found[single_name], today)
+        dept_name = teacher_mapping_manager.get_teacher_department(single_name)
+        rep = teacher_mapping_manager.get_teacher_report_for_date(single_name, today)
+        html_url = rep.get("html_url") if rep else None
+        xml_url = rep.get("xml_url") if rep else None
+
+        text = _format_teacher_day(single_name, lessons, today, dept_name=dept_name)
         await message.answer(
             text, 
-            reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav)
+            reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav, html_url=html_url, xml_url=xml_url)
         )
         await state.update_data(current_teacher_id=teacher_id, current_teacher_name=single_name)
 
@@ -309,7 +213,6 @@ async def teacher_view_selected(
     user_repo: UserRepository
 ):
     data = await state.get_data()
-    teachers_found = data.get("teacher_results") or {}
     teacher_names = data.get("teacher_names") or []
     
     idx_str = callback_data.target
@@ -318,18 +221,21 @@ async def teacher_view_selected(
         
     teacher_name = teacher_names[int(idx_str)]
     teacher_id = get_teacher_id(teacher_name)
-    lessons = teachers_found.get(teacher_name, [])
-    
-    _teacher_lessons_cache[teacher_name] = (time.time(), lessons)
     today = date.today()
 
+    lessons = await teacher_mapping_manager.fetch_teacher_lessons(teacher_name, today)
     user = await user_repo.get_user(callback.from_user.id)
     is_fav = bool(user and teacher_name in user.favorite_teachers)
 
-    text = _format_teacher_day(teacher_name, lessons, today)
+    dept_name = teacher_mapping_manager.get_teacher_department(teacher_name)
+    rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, today)
+    html_url = rep.get("html_url") if rep else None
+    xml_url = rep.get("xml_url") if rep else None
+
+    text = _format_teacher_day(teacher_name, lessons, today, dept_name=dept_name)
     await callback.message.edit_text(
         text, 
-        reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav)
+        reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav, html_url=html_url, xml_url=xml_url)
     )
     await state.update_data(current_teacher_id=teacher_id, current_teacher_name=teacher_name)
     await callback.answer()
@@ -360,13 +266,18 @@ async def teacher_nav_day(
     except (ValueError, TypeError):
         target_date = date.today()
 
-    lessons = await fetch_teacher_lessons(teacher_name)
+    lessons = await teacher_mapping_manager.fetch_teacher_lessons(teacher_name, target_date)
     is_fav = bool(user and teacher_name in user.favorite_teachers)
 
-    text = _format_teacher_day(teacher_name, lessons, target_date)
+    dept_name = teacher_mapping_manager.get_teacher_department(teacher_name)
+    rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, target_date)
+    html_url = rep.get("html_url") if rep else None
+    xml_url = rep.get("xml_url") if rep else None
+
+    text = _format_teacher_day(teacher_name, lessons, target_date, dept_name=dept_name)
     await callback.message.edit_text(
         text, 
-        reply_markup=get_teacher_schedule_hub_kb(teacher_id, target_date, is_favorite=is_fav)
+        reply_markup=get_teacher_schedule_hub_kb(teacher_id, target_date, is_favorite=is_fav, html_url=html_url, xml_url=xml_url)
     )
     await callback.answer()
 
@@ -406,15 +317,25 @@ async def teacher_nav_week(
     if not teacher_name:
         return await callback.answer("Преподаватель не найден. Повторите поиск.", show_alert=True)
 
-    lessons = await fetch_teacher_lessons(teacher_name)
-    chunks = _format_teacher_schedule_chunks(teacher_name, lessons)
+    try:
+        target_date = datetime.strptime(callback_data.date_val, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        target_date = date.today()
+
+    lessons = await teacher_mapping_manager.fetch_teacher_lessons(teacher_name, target_date)
+    dept_name = teacher_mapping_manager.get_teacher_department(teacher_name)
+    rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, target_date)
+    html_url = rep.get("html_url") if rep else None
+    xml_url = rep.get("xml_url") if rep else None
+
+    chunks = _format_teacher_schedule_chunks(teacher_name, lessons, dept_name=dept_name)
 
     if len(chunks) == 1:
         try:
-            await callback.message.edit_text(chunks[0], reply_markup=get_teacher_schedule_kb(teacher_id))
+            await callback.message.edit_text(chunks[0], reply_markup=get_teacher_schedule_kb(teacher_id, html_url=html_url, xml_url=xml_url))
         except TelegramBadRequest as e:
             if "message is not modified" not in str(e):
-                await callback.message.answer(chunks[0], reply_markup=get_teacher_schedule_kb(teacher_id))
+                await callback.message.answer(chunks[0], reply_markup=get_teacher_schedule_kb(teacher_id, html_url=html_url, xml_url=xml_url))
     else:
         try:
             await callback.message.edit_text(chunks[0])
@@ -424,8 +345,85 @@ async def teacher_nav_week(
         for chunk in chunks[1:-1]:
             await callback.message.answer(chunk)
 
-        await callback.message.answer(chunks[-1], reply_markup=get_teacher_schedule_kb(teacher_id))
+        await callback.message.answer(chunks[-1], reply_markup=get_teacher_schedule_kb(teacher_id, html_url=html_url, xml_url=xml_url))
 
+    await callback.answer()
+
+
+# ================= ПРОСМОТР УЧЕБНОГО ПЛАНА (ВСЕ ПЕРИОДЫ HTML/XML) =================
+@teacher_router.callback_query(TeacherNav.filter(F.action == "curr"))
+async def teacher_nav_curriculum(
+    callback: CallbackQuery,
+    callback_data: TeacherNav,
+    state: FSMContext,
+    user_repo: UserRepository
+):
+    teacher_id = callback_data.target
+    user = await user_repo.get_user(callback.from_user.id)
+    teacher_name = resolve_teacher(teacher_id, user)
+    if not teacher_name:
+        data = await state.get_data()
+        teacher_name = data.get("current_teacher_name")
+        if teacher_name:
+            teacher_id = get_teacher_id(teacher_name)
+
+    if not teacher_name:
+        return await callback.answer("Преподаватель не найден.", show_alert=True)
+
+    try:
+        current_date = datetime.strptime(callback_data.date_val, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        current_date = date.today()
+
+    curriculum = teacher_mapping_manager.get_teacher_curriculum(teacher_name)
+    dept_name = teacher_mapping_manager.get_teacher_department(teacher_name) or "Кафедра"
+
+    lines = [
+        f"👨‍🏫 Преподаватель: <b>{teacher_name}</b>",
+        f"🏛 <b>Кафедра:</b> {dept_name}",
+        "",
+        "📑 <b>Учебный план (официальные отчеты HTML и XML/XLS):</b>",
+        "<i>Нажмите на ссылку для просмотра или скачивания:</i>\n"
+    ]
+
+    if not curriculum:
+        lines.append("<i>Учебный план не найден.</i>")
+    else:
+        for rep in curriculum:
+            p_text = rep.get("period") or "Период"
+            h_url = rep.get("html_url") or rep.get("url")
+            x_url = rep.get("xml_url")
+
+            is_active = False
+            s_str = rep.get("start_date")
+            e_str = rep.get("end_date")
+            if s_str and e_str:
+                try:
+                    s_d = date.fromisoformat(s_str)
+                    e_d = date.fromisoformat(e_str)
+                    if s_d <= current_date <= e_d:
+                        is_active = True
+                except ValueError:
+                    pass
+
+            marker = "👉 <b>" if is_active else "▫️ "
+            close_tag = " (текущий)</b>" if is_active else ""
+
+            parts = []
+            if h_url:
+                parts.append(f'<a href="{h_url}">HTML</a>')
+            if x_url:
+                parts.append(f'<a href="{x_url}">XML/XLS</a>')
+            links_str = " | ".join(parts) if parts else ""
+
+            lines.append(f"{marker}{p_text}{close_tag} — [{links_str}]")
+
+    text = "\n".join(lines)
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_teacher_curriculum_kb(teacher_id, current_date),
+        disable_web_page_preview=True
+    )
     await callback.answer()
 
 
@@ -471,8 +469,12 @@ async def teacher_fav_toggle(
     except (ValueError, TypeError):
         current_date = date.today()
 
+    rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, current_date)
+    html_url = rep.get("html_url") if rep else None
+    xml_url = rep.get("xml_url") if rep else None
+
     await callback.message.edit_reply_markup(
-        reply_markup=get_teacher_schedule_hub_kb(teacher_id, current_date, is_favorite=is_fav)
+        reply_markup=get_teacher_schedule_hub_kb(teacher_id, current_date, is_favorite=is_fav, html_url=html_url, xml_url=xml_url)
     )
 
 
@@ -491,15 +493,19 @@ async def teacher_fav_open(
         return await callback.answer("Преподаватель не найден.", show_alert=True)
 
     await callback.answer("Загружаю расписание...")
-    lessons = await fetch_teacher_lessons(teacher_name)
     today = date.today()
+    lessons = await teacher_mapping_manager.fetch_teacher_lessons(teacher_name, today)
 
     is_fav = bool(user and teacher_name in user.favorite_teachers)
+    dept_name = teacher_mapping_manager.get_teacher_department(teacher_name)
+    rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, today)
+    html_url = rep.get("html_url") if rep else None
+    xml_url = rep.get("xml_url") if rep else None
 
-    text = _format_teacher_day(teacher_name, lessons, today)
+    text = _format_teacher_day(teacher_name, lessons, today, dept_name=dept_name)
     await callback.message.edit_text(
         text, 
-        reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav)
+        reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav, html_url=html_url, xml_url=xml_url)
     )
     await state.update_data(current_teacher_id=teacher_id, current_teacher_name=teacher_name)
 
@@ -559,7 +565,7 @@ def _format_teacher_pair(l: dict) -> str:
 
 
 # ================= ФОРМАТИРОВАНИЕ ОДНОГО ДНЯ ПРЕПОДАВАТЕЛЯ =================
-def _format_teacher_day(teacher_name: str, lessons: List[dict], target_date: date) -> str:
+def _format_teacher_day(teacher_name: str, lessons: List[dict], target_date: date, dept_name: Optional[str] = None) -> str:
     """Форматирует расписание преподавателя на конкретный день."""
     target_str = target_date.isoformat()
     day_lessons = [l for l in lessons if l.get("date") == target_str]
@@ -581,10 +587,10 @@ def _format_teacher_day(teacher_name: str, lessons: List[dict], target_date: dat
     else:
         header_date = f"{weekday_name} ({date_display})"
 
-    lines = [
-        f"👨‍🏫 Преподаватель: <b>{teacher_name}</b>",
-        f"📅 <b>{header_date}</b>"
-    ]
+    lines = [f"👨‍🏫 Преподаватель: <b>{teacher_name}</b>"]
+    if dept_name:
+        lines.append(f"🏛 <b>Кафедра:</b> {dept_name}")
+    lines.append(f"📅 <b>{header_date}</b>")
 
     if not day_lessons:
         lines.append("\n🎉 <i>В этот день занятий у преподавателя нет!</i>")
@@ -619,11 +625,15 @@ def _format_teacher_day(teacher_name: str, lessons: List[dict], target_date: dat
 def _format_teacher_schedule_chunks(
     teacher_name: str, 
     lessons: List[dict], 
-    max_chars: int = 3500
+    max_chars: int = 3500,
+    dept_name: Optional[str] = None
 ) -> List[str]:
     """Форматирует всю неделю с безопасной разбивкой на сообщения до 3500 символов."""
     if not lessons:
-        return [f"👨‍🏫 Преподаватель: <b>{teacher_name}</b>\n\nЗанятий на текущий период не найдено."]
+        header = f"👨‍🏫 Преподаватель: <b>{teacher_name}</b>\n"
+        if dept_name:
+            header += f"🏛 <b>Кафедра:</b> {dept_name}\n"
+        return [f"{header}\nЗанятий на текущий период не найдено."]
 
     weekdays = {
         0: "Понедельник", 1: "Вторник", 2: "Среда", 
@@ -662,7 +672,10 @@ def _format_teacher_schedule_chunks(
         day_blocks.append("\n".join(day_lines))
 
     chunks: List[str] = []
-    curr = f"👨‍🏫 Преподаватель: <b>{teacher_name}</b>\n\n"
+    curr = f"👨‍🏫 Преподаватель: <b>{teacher_name}</b>\n"
+    if dept_name:
+        curr += f"🏛 <b>Кафедра:</b> {dept_name}\n"
+    curr += "\n"
 
     for block in day_blocks:
         if len(curr) + len(block) + 2 > max_chars:

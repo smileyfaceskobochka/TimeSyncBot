@@ -9,7 +9,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker, Session
 from sqlmodel import SQLModel, select as sqlmodel_select
 
-from tgbot.database.models import User, Lesson, TrackedGroup, ProcessedFile, BotSetting, UserSettings, Occupancy, ActionLog, GroupChat
+from tgbot.database.models import (
+    User, Lesson, TrackedGroup, ProcessedFile, BotSetting, UserSettings, Occupancy, ActionLog, GroupChat, TeacherCurriculum
+)
 from tgbot.config import config
 
 
@@ -270,17 +272,51 @@ class ScheduleRepository(BaseRepository):
         if not query_clean: return []
         def _sync_search():
             with self.db_manager.get_session() as session:
-                statement = select(Lesson.teacher).where(Lesson.teacher.is_not(None)).distinct()
-                result = session.execute(statement)
-                all_teachers = [t for t in result.scalars().all() if t]
+                # Search in TeacherCurriculum table
+                stmt_tc = select(TeacherCurriculum.teacher).where(TeacherCurriculum.teacher.is_not(None)).distinct()
+                teachers_tc = set(session.execute(stmt_tc).scalars().all())
+
+                # Also search in Lesson table
+                stmt_l = select(Lesson.teacher).where(Lesson.teacher.is_not(None)).distinct()
+                teachers_l = set(session.execute(stmt_l).scalars().all())
+
+                all_teachers = [t for t in (teachers_tc | teachers_l) if t]
                 matches = [t for t in all_teachers if query_clean in t.lower()]
                 matches.sort(key=lambda x: (
                     0 if x.lower() == query_clean 
                     else 1 if x.lower().startswith(query_clean) 
                     else 2
                 ))
-                return matches[:20]
+                return matches[:25]
         return await asyncio.to_thread(_sync_search)
+
+    async def save_teacher_curriculum(self, items: List[TeacherCurriculum]):
+        if not items:
+            return
+        def _sync_save():
+            with self.db_manager.get_session() as session:
+                depts = {item.department for item in items if item.department}
+                for dept in depts:
+                    session.execute(delete(TeacherCurriculum).where(TeacherCurriculum.department == dept))
+                session.add_all(items)
+                session.commit()
+        await asyncio.to_thread(_sync_save)
+
+    async def get_teacher_curriculum(self, teacher_name: str) -> List[TeacherCurriculum]:
+        def _sync_get():
+            with self.db_manager.get_session() as session:
+                statement = select(TeacherCurriculum).where(
+                    TeacherCurriculum.teacher.ilike(f"%{teacher_name}%")
+                ).order_by(TeacherCurriculum.start_date)
+                return list(session.execute(statement).scalars().all())
+        return await asyncio.to_thread(_sync_get)
+
+    async def load_all_teacher_curriculum(self) -> List[TeacherCurriculum]:
+        def _sync_load():
+            with self.db_manager.get_session() as session:
+                statement = select(TeacherCurriculum).order_by(TeacherCurriculum.teacher, TeacherCurriculum.start_date)
+                return list(session.execute(statement).scalars().all())
+        return await asyncio.to_thread(_sync_load)
 
     async def get_lessons_for_teacher(self, teacher_name: str, target_date: Optional[date] = None) -> List[Lesson]:
         def _sync_get():

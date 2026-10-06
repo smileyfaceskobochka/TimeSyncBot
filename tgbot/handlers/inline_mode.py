@@ -133,21 +133,28 @@ async def handle_inline_query(
         if len(results) >= 8:
             break
         t_lessons = await schedule_repo.get_lessons_for_teacher(t_name)
-        dict_lessons = [{
-            "date": l.date,
-            "pair_number": l.pair_number,
-            "start_time": l.start_time,
-            "end_time": l.end_time,
-            "subject": l.subject,
-            "class_type": l.class_type,
-            "building": l.building,
-            "room": l.room,
-            "groups": l.group_name,
-            "raw_info": l.raw_info,
-        } for l in t_lessons]
+        if not t_lessons:
+            from tgbot.services.parser.teacher_parser import teacher_mapping_manager
+            dict_lessons = await teacher_mapping_manager.fetch_teacher_lessons(t_name, today)
+            dept_name = teacher_mapping_manager.get_teacher_department(t_name)
+        else:
+            from tgbot.services.parser.teacher_parser import teacher_mapping_manager
+            dept_name = teacher_mapping_manager.get_teacher_department(t_name)
+            dict_lessons = [{
+                "date": l.date,
+                "pair_number": l.pair_number,
+                "start_time": l.start_time,
+                "end_time": l.end_time,
+                "subject": l.subject,
+                "class_type": l.class_type,
+                "building": l.building,
+                "room": l.room,
+                "groups": l.group_name,
+                "raw_info": l.raw_info,
+            } for l in t_lessons]
 
         # Сегодня
-        text_today = _clip(_format_teacher_day(t_name, dict_lessons, today))
+        text_today = _clip(_format_teacher_day(t_name, dict_lessons, today, dept_name=dept_name))
         results.append(
             InlineQueryResultArticle(
                 id=hashlib.md5(f"teach_{t_name}_today_{today.isoformat()}".encode()).hexdigest(),
@@ -160,7 +167,7 @@ async def handle_inline_query(
             )
         )
         # Завтра
-        text_tmrw = _clip(_format_teacher_day(t_name, dict_lessons, tomorrow))
+        text_tmrw = _clip(_format_teacher_day(t_name, dict_lessons, tomorrow, dept_name=dept_name))
         results.append(
             InlineQueryResultArticle(
                 id=hashlib.md5(f"teach_{t_name}_tmrw_{tomorrow.isoformat()}".encode()).hexdigest(),
