@@ -19,17 +19,6 @@ admin_parser_router = Router()
 admin_parser_router.message.filter(AdminFilter())
 admin_parser_router.callback_query.filter(AdminFilter())
 
-# Store running parser tasks for tracking
-_parser_tasks = []
-
-
-def _cleanup_tasks():
-    """Remove completed tasks from tracking"""
-    global _parser_tasks
-    _parser_tasks = [task for task in _parser_tasks if not task.done()]
-
-
-
 @admin_parser_router.message(Command("parser_status"))
 async def cmd_parser_status(message: Message, parser_scheduler):
     """
@@ -69,6 +58,7 @@ async def cmd_parser_status(message: Message, parser_scheduler):
     
     # Кнопки управления
     builder = InlineKeyboardBuilder()
+    builder.button(text="🔄 Обновить", callback_data="parser_status_refresh")
     builder.button(text="▶️ Запустить сейчас", callback_data="parser_run_now")
     builder.adjust(2)
     
@@ -106,6 +96,7 @@ async def callback_parser_status_refresh(callback: CallbackQuery, parser_schedul
     text += f"▫️ Ошибок: <code>{stats['failed_runs']}</code>\n"
     
     builder = InlineKeyboardBuilder()
+    builder.button(text="🔄 Обновить", callback_data="parser_status_refresh")
     builder.button(text="▶️ Запустить сейчас", callback_data="parser_run_now")
     builder.adjust(2)
     
@@ -222,6 +213,24 @@ async def cmd_parser_logs(message: Message):
         
     except Exception as e:
         await message.answer(f"❌ Ошибка чтения логов: <code>{str(e)}</code>")
+
+
+@admin_parser_router.message(Command("sync_teachers"))
+async def cmd_sync_teachers(message: Message):
+    """Принудительная синхронизация карты преподавателей ВятГУ"""
+    from tgbot.services.parser.teacher_parser import teacher_mapping_manager
+    from tgbot.services.parser.progress import ProgressReporter
+    progress = ProgressReporter(message)
+    await progress.report("🔄 Начинаю сканирование кафедр и преподавателей...", 0.1)
+    try:
+        ok = await teacher_mapping_manager.ensure_mapping(force_refresh=True, progress=progress)
+        if ok:
+            teachers_count = len(teacher_mapping_manager._teacher_names)
+            await message.answer(f"✅ Преподаватели успешно обновлены! Найдено: <b>{teachers_count}</b>")
+        else:
+            await message.answer("❌ Не удалось обновить список преподавателей. Проверьте доступность сайта ВятГУ.")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при обновлении преподавателей: {e}")
 
 
 @admin_parser_router.message(Command("sync_occupancy"))

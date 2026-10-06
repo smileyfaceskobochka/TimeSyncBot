@@ -21,9 +21,6 @@ class AdminCallback(CallbackData, prefix="adm"):
     action: str
     value: str = ""
 
-class MenuCallback(CallbackData, prefix="menu"):
-    action: str
-
 class FreeRoomsDate(CallbackData, prefix="fr_date"):
     action: str
     date: str = ""

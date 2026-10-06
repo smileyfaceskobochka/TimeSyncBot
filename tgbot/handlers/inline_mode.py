@@ -74,6 +74,8 @@ async def handle_inline_query(
                 )
             )
 
+        bot_user = await inline_query.bot.me()
+        bot_uname = bot_user.username or "vyatsuts_bot"
         results.append(
             InlineQueryResultArticle(
                 id="help_hint",
@@ -82,7 +84,7 @@ async def handle_inline_query(
                 input_message_content=InputTextMessageContent(
                     message_text=(
                         "🎓 <b>TimeSyncBot</b> — расписание ВятГУ прямо в этом чате!\n\n"
-                        "Используйте: <code>@vyatsuts_bot [группа или преподаватель]</code>"
+                        f"Используйте: <code>@{bot_uname} [группа или преподаватель]</code>"
                     ),
                     parse_mode="HTML"
                 )

@@ -1,5 +1,6 @@
 from datetime import date
 from aiogram import Router, F
+from aiogram.enums import ChatAction
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -8,18 +9,17 @@ from tgbot.services.services import OccupancyService
 from tgbot.keyboards.inline import (
     get_free_rooms_date_kb,
     get_free_rooms_calendar_kb,
-    get_pair_selection_kb,
     get_building_selection_kb,
     get_available_pairs_kb
 )
 from tgbot.keyboards.callback_data import FreeRoomsDate
-from tgbot.states.states import ScheduleState # Using an existing state or creating a specific one
 
 free_rooms_router = Router()
 
 @free_rooms_router.message(Command("free"))
 async def cmd_free_rooms(message: Message, state: FSMContext, occupancy_repo: OccupancyRepository):
     await state.clear()
+    await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     buildings = await occupancy_repo.get_buildings()
     await message.answer(
         "🏢 <b>Выберите корпус:</b>",

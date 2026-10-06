@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 import logging
 from aiogram import Router, F
+from aiogram.enums import ChatAction
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -18,7 +19,7 @@ from tgbot.database.repositories import (
 from tgbot.services.parser.runner import run_pipeline
 from tgbot.services.services import ScheduleService
 from tgbot.services.utils import parse_date
-from tgbot.states.states import RegState, FavState
+from tgbot.states.states import RegState
 from tgbot.keyboards.inline import get_main_menu, get_group_selection_kb, get_schedule_hub_kb, get_user_settings_kb
 from tgbot.keyboards.reply import get_main_reply_kb
 from tgbot.keyboards.callback_data import GroupSelectCb
@@ -189,6 +190,7 @@ async def handle_quick_schedule_text(
 ):
     await state.clear()
     await _safe_delete_trigger(message)
+    await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     user = await user_repo.get_user(message.from_user.id)
     if not user or not user.group_name:
         await state.set_state(RegState.search_group)
@@ -333,6 +335,7 @@ async def process_group_search(
     state: FSMContext,
     analytics_repo: AnalyticsRepository,
 ):
+    await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     await analytics_repo.log_action(
         message.from_user.id, "search_group", message.text.strip()
     )

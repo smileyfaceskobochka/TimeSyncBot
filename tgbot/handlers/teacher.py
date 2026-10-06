@@ -7,7 +7,14 @@ from typing import List, Dict, Optional, Tuple
 
 import aiohttp
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.enums import ChatAction
+from aiogram.types import (
+    Message, 
+    CallbackQuery, 
+    InlineKeyboardMarkup, 
+    InlineKeyboardButton, 
+    LinkPreviewOptions
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -140,6 +147,7 @@ async def teacher_search_surname(message: Message, state: FSMContext, user_repo:
     if len(surname) < 3:
         return await message.answer("⚠️ Введите хотя бы 3 буквы фамилии для поиска.")
 
+    await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     progress = ProgressReporter(message)
 
     try:
@@ -195,7 +203,8 @@ async def teacher_search_surname(message: Message, state: FSMContext, user_repo:
         text = _format_teacher_day(single_name, lessons, today, dept_name=dept_name)
         await message.answer(
             text, 
-            reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav, html_url=html_url, xml_url=xml_url)
+            reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav, html_url=html_url, xml_url=xml_url),
+            link_preview_options=LinkPreviewOptions(is_disabled=True)
         )
         await state.update_data(current_teacher_id=teacher_id, current_teacher_name=single_name)
 
@@ -235,7 +244,8 @@ async def teacher_view_selected(
     text = _format_teacher_day(teacher_name, lessons, today, dept_name=dept_name)
     await callback.message.edit_text(
         text, 
-        reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav, html_url=html_url, xml_url=xml_url)
+        reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav, html_url=html_url, xml_url=xml_url),
+        link_preview_options=LinkPreviewOptions(is_disabled=True)
     )
     await state.update_data(current_teacher_id=teacher_id, current_teacher_name=teacher_name)
     await callback.answer()
@@ -277,7 +287,8 @@ async def teacher_nav_day(
     text = _format_teacher_day(teacher_name, lessons, target_date, dept_name=dept_name)
     await callback.message.edit_text(
         text, 
-        reply_markup=get_teacher_schedule_hub_kb(teacher_id, target_date, is_favorite=is_fav, html_url=html_url, xml_url=xml_url)
+        reply_markup=get_teacher_schedule_hub_kb(teacher_id, target_date, is_favorite=is_fav, html_url=html_url, xml_url=xml_url),
+        link_preview_options=LinkPreviewOptions(is_disabled=True)
     )
     await callback.answer()
 
@@ -302,7 +313,7 @@ async def teacher_nav_calendar(callback: CallbackQuery, callback_data: TeacherNa
 async def teacher_nav_week(
     callback: CallbackQuery, 
     callback_data: TeacherNav, 
-    state: FSMContext,
+    state: FSMContext, 
     user_repo: UserRepository
 ):
     teacher_id = callback_data.target
@@ -332,20 +343,20 @@ async def teacher_nav_week(
 
     if len(chunks) == 1:
         try:
-            await callback.message.edit_text(chunks[0], reply_markup=get_teacher_schedule_kb(teacher_id, html_url=html_url, xml_url=xml_url))
+            await callback.message.edit_text(chunks[0], reply_markup=get_teacher_schedule_kb(teacher_id, html_url=html_url, xml_url=xml_url), link_preview_options=LinkPreviewOptions(is_disabled=True))
         except TelegramBadRequest as e:
             if "message is not modified" not in str(e):
-                await callback.message.answer(chunks[0], reply_markup=get_teacher_schedule_kb(teacher_id, html_url=html_url, xml_url=xml_url))
+                await callback.message.answer(chunks[0], reply_markup=get_teacher_schedule_kb(teacher_id, html_url=html_url, xml_url=xml_url), link_preview_options=LinkPreviewOptions(is_disabled=True))
     else:
         try:
-            await callback.message.edit_text(chunks[0])
+            await callback.message.edit_text(chunks[0], link_preview_options=LinkPreviewOptions(is_disabled=True))
         except TelegramBadRequest:
-            await callback.message.answer(chunks[0])
+            await callback.message.answer(chunks[0], link_preview_options=LinkPreviewOptions(is_disabled=True))
 
         for chunk in chunks[1:-1]:
-            await callback.message.answer(chunk)
+            await callback.message.answer(chunk, link_preview_options=LinkPreviewOptions(is_disabled=True))
 
-        await callback.message.answer(chunks[-1], reply_markup=get_teacher_schedule_kb(teacher_id, html_url=html_url, xml_url=xml_url))
+        await callback.message.answer(chunks[-1], reply_markup=get_teacher_schedule_kb(teacher_id, html_url=html_url, xml_url=xml_url), link_preview_options=LinkPreviewOptions(is_disabled=True))
 
     await callback.answer()
 
@@ -505,7 +516,8 @@ async def teacher_fav_open(
     text = _format_teacher_day(teacher_name, lessons, today, dept_name=dept_name)
     await callback.message.edit_text(
         text, 
-        reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav, html_url=html_url, xml_url=xml_url)
+        reply_markup=get_teacher_schedule_hub_kb(teacher_id, today, is_favorite=is_fav, html_url=html_url, xml_url=xml_url),
+        link_preview_options=LinkPreviewOptions(is_disabled=True)
     )
     await state.update_data(current_teacher_id=teacher_id, current_teacher_name=teacher_name)
 

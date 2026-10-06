@@ -309,11 +309,6 @@ def get_back_to_dates_kb() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="« К выбору даты", callback_data=MeetingCb(action="pick_date").pack()))
     builder.row(InlineKeyboardButton(text="« В главное меню", callback_data="cmd_start"))
     return builder.as_markup()
-def get_pair_selection_kb() -> InlineKeyboardMarkup:
-    buttons = [[InlineKeyboardButton(text=f"{p}-я пара", callback_data=f"pair_{p}")] for p in range(1, 8)]
-    buttons.append([InlineKeyboardButton(text="« Назад", callback_data="free_rooms_start")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
 def get_building_selection_kb(buildings: List[str]) -> InlineKeyboardMarkup:
     # Sort buildings: numbers first, then text
     try:
@@ -347,25 +342,7 @@ def get_admin_menu_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⚙️ Настройки бота", callback_data=AdminCallback(action="sett").pack())],
         [InlineKeyboardButton(text="« Меню", callback_data="cmd_start")]
     ])
-def get_meeting_groups_kb(added_groups: list[str]) -> InlineKeyboardMarkup:
-    """Клавиатура управления списком групп для общих окон"""
-    builder = InlineKeyboardBuilder()
-    
-    # Кнопка добавления группы
-    builder.row(InlineKeyboardButton(text="➕ Добавить группу", callback_data=MeetingCb(action="add_btn").pack()))
-    
-    # Если добавлено хотя бы 2 группы, показываем кнопку "Далее (Выбрать дату)"
-    if len(added_groups) >= 2:
-        builder.row(InlineKeyboardButton(text="➡️ Выбрать дату", callback_data=MeetingCb(action="pick_date").pack()))
-    
-    # Кнопки для удаления добавленных групп (если ошиблись)
-    if added_groups:
-        for grp in added_groups:
-            builder.row(InlineKeyboardButton(text=f"❌ Удалить {grp}", callback_data=MeetingCb(action="del", value=grp).pack()))
-            
-    # Кнопка выхода
-    builder.row(InlineKeyboardButton(text="« Главное меню", callback_data="cmd_start"))
-    return builder.as_markup()
+
 def get_bot_settings_kb(settings: dict) -> InlineKeyboardMarkup:
     def status_icon(value: str) -> str: return "🟢" if value == '1' else "🔴"
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -377,9 +354,6 @@ def get_bot_settings_kb(settings: dict) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=f"{status_icon(settings.get('btn_free_rooms', '1'))} Свободные аудитории", callback_data=AdminCallback(action="btn_tog", value="btn_free_rooms").pack())],
         [InlineKeyboardButton(text="« Назад", callback_data="admin_panel")]
     ])
-
-def get_cancel_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="admin_panel")]])
 def get_teacher_institutes_kb(institutes: List[dict]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for idx, inst in enumerate(institutes):

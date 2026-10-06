@@ -204,32 +204,6 @@ class ScheduleService:
         return "\n".join(lines)
 
 
-class CuratorService:
-    def __init__(self, user_repo: UserRepository):
-        self.user_repo = user_repo
-
-    async def try_activate_code(self, user_id: int, code: str) -> Union[str, bool]:
-        group_name = await self.user_repo.activate_curator_code(code)
-        if not group_name:
-            return False
-        user = await self.user_repo.get_user(user_id)
-        if user:
-            user.role = "curator"
-            user.curator_group = group_name
-            await self.user_repo.upsert_user(user)
-            return group_name
-        return False
-
-    async def broadcast_to_group(
-        self, bot: Bot, group_name: str, message_text: str
-    ) -> int:
-        students = await self.user_repo.get_users_by_group(group_name)
-        student_ids = [s.telegram_id for s in students]
-        if not student_ids:
-            return 0
-        formatted_text = f"📢 <b>Сообщение от куратора:</b>\n\n{message_text}"
-        return await safe_broadcast(bot, student_ids, formatted_text)
-
 
 class OccupancyService:
     def __init__(self, occupancy_repo: OccupancyRepository):
