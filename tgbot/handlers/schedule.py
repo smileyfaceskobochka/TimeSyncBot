@@ -9,7 +9,7 @@ from tgbot.database.repositories import (
     ScheduleRepository,
     AnalyticsRepository,
 )
-from tgbot.services.services import ScheduleService
+from tgbot.services.services import ScheduleService, format_week_schedule_expandable
 from tgbot.keyboards.callback_data import ScheduleNav
 from tgbot.keyboards.inline import get_schedule_hub_kb, get_main_menu
 from tgbot.states.states import ScheduleState
@@ -144,28 +144,19 @@ async def navigate_schedule(
         start_date = current
         end_date = start_date + timedelta(days=6)
 
-        text_parts = [
-            f"📆 <b>Расписание на неделю ({start_date.strftime('%d.%m')} — {end_date.strftime('%d.%m')})</b>\nГруппа: {group}\n"
-        ]
-
-        has_any = False
+        week_data = []
         for i in range(7):
             day_date = start_date + timedelta(days=i)
             lessons, is_predicted = await schedule_repo.get_lessons_with_status(group, day_date)
-            if lessons:
-                has_any = True
-                day_text = service.format_day(lessons, day_date, group, settings, is_predicted=is_predicted)
-                text_parts.append(day_text)
+            week_data.append((day_date, lessons, is_predicted))
 
-        if not has_any:
-            text_parts.append("🎉 На эту неделю пар нет!")
-
+        week_text = format_week_schedule_expandable(week_data, group, start_date, end_date)
         is_fav = bool(user and group in user.favorites)
         is_my = bool(user and user.group_name == group)
 
         try:
             await callback.message.edit_text(
-                text="\n\n".join(text_parts),
+                text=week_text,
                 reply_markup=get_schedule_hub_kb(group, current_date=start_date, is_favorite=is_fav, is_my_group=is_my)
             )
         except TelegramBadRequest as e:
@@ -188,11 +179,12 @@ async def navigate_schedule(
         
         is_fav = bool(user and group in user.favorites)
         is_my = bool(user and user.group_name == group)
+        rooms_copy = service.format_locations(lessons)
 
         try:
             await callback.message.edit_text(
                 text=service.format_day(lessons, target_date, group, settings, is_predicted=is_predicted),
-                reply_markup=get_schedule_hub_kb(group, current_date=target_date, is_favorite=is_fav, is_my_group=is_my)
+                reply_markup=get_schedule_hub_kb(group, current_date=target_date, is_favorite=is_fav, is_my_group=is_my, rooms_copy_text=rooms_copy)
             )
         except TelegramBadRequest as e:
             if "message is not modified" in str(e):
@@ -227,11 +219,12 @@ async def navigate_schedule(
     lessons, is_predicted = await schedule_repo.get_lessons_with_status(group, new_date)
     is_fav = bool(user and group in user.favorites)
     is_my = bool(user and user.group_name == group)
+    rooms_copy = service.format_locations(lessons)
     
     try:
         await callback.message.edit_text(
             text=service.format_day(lessons, new_date, group, settings, is_predicted=is_predicted),
-            reply_markup=get_schedule_hub_kb(group, current_date=new_date, is_favorite=is_fav, is_my_group=is_my)
+            reply_markup=get_schedule_hub_kb(group, current_date=new_date, is_favorite=is_fav, is_my_group=is_my, rooms_copy_text=rooms_copy)
         )
     except TelegramBadRequest as e:
         if "message is not modified" in str(e):

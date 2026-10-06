@@ -6,7 +6,7 @@
 
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, EphemeralMessageParameters
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from datetime import datetime
 from tgbot.filters import AdminFilter
@@ -62,7 +62,17 @@ async def cmd_parser_status(message: Message, parser_scheduler):
     builder.button(text="▶️ Запустить сейчас", callback_data="parser_run_now")
     builder.adjust(2)
     
-    await message.answer(text, reply_markup=builder.as_markup())
+    if message.chat.type in ("group", "supergroup"):
+        await message.bot.send_message(
+            chat_id=message.chat.id,
+            text=text,
+            reply_markup=builder.as_markup(),
+            ephemeral_message_parameters=EphemeralMessageParameters(
+                receiver_user_id=message.from_user.id
+            )
+        )
+    else:
+        await message.answer(text, reply_markup=builder.as_markup())
 
 
 @admin_parser_router.callback_query(F.data == "parser_status_refresh")

@@ -1,5 +1,6 @@
-from datetime import date
-from typing import List, Optional, Set, Union
+from datetime import date, timedelta
+from html import escape
+from typing import List, Optional, Set, Tuple, Union
 from aiogram import Bot
 from tgbot.database.models import Lesson, UserSettings
 from tgbot.database.repositories import UserRepository, OccupancyRepository
@@ -203,6 +204,108 @@ class ScheduleService:
 
         return "\n".join(lines)
 
+    @staticmethod
+    def format_locations(lessons: List[Lesson]) -> Optional[str]:
+        """Формирует компактный текст со списком корпусов и аудиторий для CopyTextButton."""
+        from collections import defaultdict
+        grouped: defaultdict[str, list[str]] = defaultdict(list)
+        for l in lessons:
+            bld = (l.building or "").strip()
+            rm = (l.room or "").strip()
+            if rm:
+                b_key = f"Корпус {bld}" if bld else "Корпус ?"
+                if rm not in grouped[b_key]:
+                    grouped[b_key].append(rm)
+
+        if not grouped:
+            return None
+
+        parts = [f"{bld}: ауд. {', '.join(rooms)}" for bld, rooms in grouped.items()]
+        return "\n".join(parts)
+
+
+WEEKDAY_NAMES = (
+    "Понедельник", "Вторник", "Среда",
+    "Четверг", "Пятница", "Суббота", "Воскресенье",
+)
+
+TELEGRAM_TEXT_LIMIT = 4096
+
+
+def _unpack_week_day(raw: Any, fallback_date: date) -> Tuple[date, List[Lesson], bool]:
+    """Приводит элемент week_days к виду (дата, пары, прогноз)."""
+    if isinstance(raw, dict):
+        day_date = raw.get("date") or raw.get("day_date") or fallback_date
+        return day_date, list(raw.get("lessons") or []), bool(raw.get("is_predicted"))
+
+    if isinstance(raw, (tuple, list)) and raw and isinstance(raw[0], date):
+        is_predicted = bool(raw[2]) if len(raw) > 2 else False
+        return raw[0], list(raw[1] or []), is_predicted
+
+    return fallback_date, list(raw or []), False
+
+
+def format_week_schedule_expandable(
+    week_days: list,
+    group_name: str,
+    start_date: date,
+    end_date: date,
+) -> str:
+    """Недельное расписание: занятия каждого дня обёрнуты в <blockquote expandable>."""
+    title = (
+        f"📆 <b>Расписание на неделю "
+        f"({start_date.strftime('%d.%m')} — {end_date.strftime('%d.%m')})</b>\n"
+        f"👥 Группа: <b>{escape(group_name)}</b>"
+    )
+
+    service = ScheduleService()
+    today = date.today()
+    blocks: List[str] = []
+    lessons_count = 0
+
+    for offset, raw in enumerate(week_days):
+        day_date, lessons, is_predicted = _unpack_week_day(
+            raw, start_date + timedelta(days=offset)
+        )
+
+        header = f"📅 <b>{WEEKDAY_NAMES[day_date.weekday()]} ({day_date.strftime('%d.%m')})"
+        if day_date == today:
+            header += " — сегодня"
+        header += "</b>"
+
+        if not lessons:
+            blocks.append(f"{header}\n<i>Пар нет</i>")
+            continue
+
+        lessons_count += len(lessons)
+        body = service.format_day(lessons, day_date, group_name, is_predicted=is_predicted)
+        body = body.split("\n", 1)[1].strip() if "\n" in body else body
+
+        blocks.append(f"{header}\n<blockquote expandable>\n{body}\n</blockquote>")
+
+    if lessons_count == 0:
+        blocks = ["🎉 На эту неделю пар нет!"]
+
+    return _join_blocks(title, blocks)
+
+
+def _join_blocks(
+    title: str, blocks: List[str], limit: int = TELEGRAM_TEXT_LIMIT
+) -> str:
+    """Склеивает дневные блоки, не превышая лимит Telegram."""
+    parts = [title]
+    hidden = 0
+
+    for i, block in enumerate(blocks):
+        if len(parts) > 1 and len("\n\n".join(parts + [block])) > limit:
+            hidden = len(blocks) - i
+            break
+        parts.append(block)
+
+    if hidden:
+        parts.append(f"👉 Остальные {hidden} дн. — в разделе «Расписание».")
+
+    return "\n\n".join(parts)
 
 
 class OccupancyService:

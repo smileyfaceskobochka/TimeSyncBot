@@ -17,7 +17,7 @@ from tgbot.database.repositories import (
     OccupancyRepository,
 )
 from tgbot.services.parser.runner import run_pipeline
-from tgbot.services.services import ScheduleService
+from tgbot.services.services import ScheduleService, format_week_schedule_expandable
 from tgbot.services.utils import parse_date
 from tgbot.states.states import RegState
 from tgbot.keyboards.inline import get_main_menu, get_group_selection_kb, get_schedule_hub_kb, get_user_settings_kb
@@ -210,37 +210,34 @@ async def handle_quick_schedule_text(
         target_date = date.today() + timedelta(days=1)
         lessons, is_predicted = await schedule_repo.get_lessons_with_status(group_name, target_date)
         day_text = service.format_day(lessons, target_date, group_name, settings, is_predicted=is_predicted)
+        rooms_copy = service.format_locations(lessons)
         await message.answer(
             day_text,
-            reply_markup=get_schedule_hub_kb(group_name, current_date=target_date, is_favorite=is_fav, is_my_group=True)
+            reply_markup=get_schedule_hub_kb(group_name, current_date=target_date, is_favorite=is_fav, is_my_group=True, rooms_copy_text=rooms_copy)
         )
     elif "недел" in text or "week" in text:
         today = date.today()
         start_date = today - timedelta(days=today.weekday())
-        text_parts = [
-            f"📆 <b>Расписание на неделю ({start_date.strftime('%d.%m')} — {(start_date + timedelta(days=6)).strftime('%d.%m')})</b>\nГруппа: {group_name}\n"
-        ]
-        has_any = False
+        end_date = start_date + timedelta(days=6)
+        week_data = []
         for i in range(7):
             d = start_date + timedelta(days=i)
-            lessons, is_predicted = await schedule_repo.get_lessons_with_status(group_name, d)
-            if lessons:
-                has_any = True
-                text_parts.append(service.format_day(lessons, d, group_name, settings, is_predicted=is_predicted))
-        if not has_any:
-            text_parts.append("🎉 На эту неделю пар нет!")
+            d_lessons, is_pred = await schedule_repo.get_lessons_with_status(group_name, d)
+            week_data.append((d, d_lessons, is_pred))
 
+        week_text = format_week_schedule_expandable(week_data, group_name, start_date, end_date)
         await message.answer(
-            "\n\n".join(text_parts),
+            week_text,
             reply_markup=get_schedule_hub_kb(group_name, current_date=start_date, is_favorite=is_fav, is_my_group=True)
         )
     else:  # today
         target_date = date.today()
         lessons, is_predicted = await schedule_repo.get_lessons_with_status(group_name, target_date)
         day_text = service.format_day(lessons, target_date, group_name, settings, is_predicted=is_predicted)
+        rooms_copy = service.format_locations(lessons)
         await message.answer(
             day_text,
-            reply_markup=get_schedule_hub_kb(group_name, current_date=target_date, is_favorite=is_fav, is_my_group=True)
+            reply_markup=get_schedule_hub_kb(group_name, current_date=target_date, is_favorite=is_fav, is_my_group=True, rooms_copy_text=rooms_copy)
         )
 
 @user_router.message(F.text == "🏢 Аудитории")

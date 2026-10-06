@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 from typing import List, Optional
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CopyTextButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from tgbot.database.models import User, UserSettings, GroupChat
 from tgbot.config import config
@@ -178,7 +178,8 @@ def get_schedule_hub_kb(
     group_name: str, 
     current_date: Optional[date] = None,
     is_favorite: bool = False, 
-    is_my_group: bool = False
+    is_my_group: bool = False,
+    rooms_copy_text: Optional[str] = None
 ) -> InlineKeyboardMarkup:
     today = date.today()
     if current_date is None:
@@ -217,7 +218,16 @@ def get_schedule_hub_kb(
         )
     )
 
-    # 3. Избранное и Основная группа
+    # 3. Кнопка копирования аудиторий (1-тап копирование в буфер)
+    if rooms_copy_text:
+        builder.row(
+            InlineKeyboardButton(
+                text="📋 Скопировать аудитории",
+                copy_text=CopyTextButton(text=rooms_copy_text)
+            )
+        )
+
+    # 4. Избранное и Основная группа
     action_btns = []
     if is_favorite:
         action_btns.append(InlineKeyboardButton(text="⭐ В избранном ❌", callback_data=GroupSelectCb(name=group_name, action="fav_remove_from_hub").pack()))
@@ -230,7 +240,7 @@ def get_schedule_hub_kb(
     if action_btns:
         builder.row(*action_btns)
 
-    # 4. Поиск и Главное меню
+    # 5. Поиск и Главное меню
     builder.row(
         InlineKeyboardButton(text="🔎 Другая группа", callback_data="search_start"),
         InlineKeyboardButton(text="« Главное меню", callback_data="cmd_start")

@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, EphemeralMessageParameters
 from aiogram.filters import Command
 from tgbot.filters import AdminFilter
 from tgbot.database.repositories import UserRepository
@@ -13,7 +13,18 @@ admin_router.callback_query.filter(AdminFilter())
 
 @admin_router.message(Command("admin"))
 async def admin_start(message: Message):
-    await message.answer("👑 <b>Панель администратора</b>", reply_markup=get_admin_menu_kb())
+    if message.chat.type in ("group", "supergroup"):
+        # В групповых чатах отправляем эфемерно, чтобы не засорять чат и не раскрывать админку
+        await message.bot.send_message(
+            chat_id=message.chat.id,
+            text="👑 <b>Панель администратора</b>",
+            reply_markup=get_admin_menu_kb(),
+            ephemeral_message_parameters=EphemeralMessageParameters(
+                receiver_user_id=message.from_user.id
+            )
+        )
+    else:
+        await message.answer("👑 <b>Панель администратора</b>", reply_markup=get_admin_menu_kb())
 
 @admin_router.message(Command("stop_bot"))
 async def admin_stop_bot(message: Message):
