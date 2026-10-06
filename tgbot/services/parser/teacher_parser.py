@@ -574,6 +574,10 @@ class TeacherMappingManager:
         ))
         return matches
 
+    def get_all_teacher_names(self) -> List[str]:
+        """Returns all unique mapped teacher names."""
+        return list(self._teacher_names)
+
     def get_teacher_department(self, teacher_name: str) -> Optional[str]:
         """Returns the primary department name for a teacher."""
         depts = self._teacher_to_depts.get(teacher_name)
