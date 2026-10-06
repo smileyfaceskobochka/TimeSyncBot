@@ -238,7 +238,7 @@ async def navigate_schedule(
             await callback.answer("Это расписание уже показано.")
         else:
             raise e
-@schedule_router.message(ScheduleState.waiting_for_date)
+@schedule_router.message(ScheduleState.waiting_for_date, ~F.text.startswith("/"), ~F.text.in_({"📅 Сегодня", "📆 Завтра", "🗓 Неделя", "🏢 Аудитории", "👨‍🏫 Преподаватели", "⭐ Избранное", "🔎 Поиск группы", "⚙️ Настройки", "💬 Главное меню"}))
 async def process_custom_date(
     message: Message,
     state: FSMContext,

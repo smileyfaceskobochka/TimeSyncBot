@@ -133,7 +133,7 @@ async def teacher_search_cmd(message: Message, state: FSMContext):
 
 
 # ================= ОБРАБОТКА ВВОДА ФАМИЛИИ =================
-@teacher_router.message(ScheduleState.waiting_for_teacher)
+@teacher_router.message(ScheduleState.waiting_for_teacher, ~F.text.startswith("/"), ~F.text.in_({"📅 Сегодня", "📆 Завтра", "🗓 Неделя", "🏢 Аудитории", "👨‍🏫 Преподаватели", "⭐ Избранное", "🔎 Поиск группы", "⚙️ Настройки", "💬 Главное меню"}))
 async def teacher_search_surname(message: Message, state: FSMContext, user_repo: UserRepository):
     query = message.text.strip()
     surname = query.lower()

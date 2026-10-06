@@ -5,6 +5,13 @@ Adheres to the Unix principle of direct, one-tap composition.
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 
+REPLY_BUTTON_TEXTS = {
+    "📅 Сегодня", "📆 Завтра", "🗓 Неделя",
+    "🏢 Аудитории", "👨‍🏫 Преподаватели", "⭐ Избранное",
+    "🔎 Поиск группы", "⚙️ Настройки", "💬 Главное меню"
+}
+
+
 def get_main_reply_kb() -> ReplyKeyboardMarkup:
     """
     Persistent bottom keyboard under the Telegram text input.

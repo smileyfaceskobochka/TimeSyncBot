@@ -169,7 +169,17 @@ async def callback_cmd_help(callback: CallbackQuery, user_repo: UserRepository):
         await callback.answer()
 
 # ================= ОБРАБОТЧИКИ КНОПОК ПОД ПОЛЕМ ВВОДА (REPLY KEYBOARD) =================
-@user_router.message(F.text.in_({"📅 Сегодня", "📆 Завтра", "🗓 Неделя"}) | Command("today", "tomorrow", "week", "сегодня", "завтра", "неделя"))
+async def _safe_delete_trigger(message: Message):
+    """Safely delete user trigger message in private chats to keep chat clean."""
+    if message.chat.type == "private":
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+
+@user_router.message(F.text.in_({"📅 Сегодня", "📆 Завтра", "🗓 Неделя"}))
+@user_router.message(Command("today", "tomorrow", "week", "сегодня", "завтра", "неделя"))
 async def handle_quick_schedule_text(
     message: Message,
     user_repo: UserRepository,
@@ -178,6 +188,7 @@ async def handle_quick_schedule_text(
     state: FSMContext,
 ):
     await state.clear()
+    await _safe_delete_trigger(message)
     user = await user_repo.get_user(message.from_user.id)
     if not user or not user.group_name:
         await state.set_state(RegState.search_group)
@@ -232,11 +243,13 @@ async def handle_quick_schedule_text(
 
 @user_router.message(F.text == "🏢 Аудитории")
 async def handle_free_rooms_reply(message: Message, state: FSMContext, occupancy_repo: OccupancyRepository):
+    await _safe_delete_trigger(message)
     from tgbot.handlers.free_rooms import cmd_free_rooms
     await cmd_free_rooms(message, state, occupancy_repo)
 
 @user_router.message(F.text == "👨‍🏫 Преподаватели")
 async def handle_teachers_reply(message: Message, state: FSMContext):
+    await _safe_delete_trigger(message)
     from tgbot.states.states import ScheduleState
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="« Главное меню", callback_data="cmd_start"))
@@ -249,21 +262,25 @@ async def handle_teachers_reply(message: Message, state: FSMContext):
 
 @user_router.message(F.text == "⭐ Избранное")
 async def handle_favorites_reply(message: Message, user_repo: UserRepository):
+    await _safe_delete_trigger(message)
     from tgbot.handlers.favorites import cmd_favorites
     await cmd_favorites(message, user_repo)
 
 @user_router.message(F.text.in_({"🔎 Поиск группы", "🔎 Поиск"}))
 async def handle_search_reply(message: Message, state: FSMContext):
+    await _safe_delete_trigger(message)
     await cmd_search_start(message, state)
 
 @user_router.message(F.text == "⚙️ Настройки")
 async def handle_settings_reply(message: Message, user_repo: UserRepository):
+    await _safe_delete_trigger(message)
     user = await user_repo.get_user(message.from_user.id)
     settings = user.settings if user and user.settings else None
     await message.answer("⚙️ <b>Настройки отображения:</b>", reply_markup=get_user_settings_kb(settings))
 
 @user_router.message(F.text == "💬 Главное меню")
 async def handle_main_menu_reply(message: Message, user_repo: UserRepository, state: FSMContext):
+    await _safe_delete_trigger(message)
     user = await user_repo.get_user(message.from_user.id)
     bot_settings = await user_repo.get_settings()
     await show_main_menu(message, user, bot_settings, state)
@@ -309,7 +326,7 @@ async def search_start(callback: CallbackQuery, state: FSMContext):
     await state.set_state(RegState.search_group)
 
 
-@user_router.message(RegState.search_group)
+@user_router.message(RegState.search_group, ~F.text.startswith("/"), ~F.text.in_({"📅 Сегодня", "📆 Завтра", "🗓 Неделя", "🏢 Аудитории", "👨‍🏫 Преподаватели", "⭐ Избранное", "🔎 Поиск группы", "⚙️ Настройки", "💬 Главное меню"}))
 async def process_group_search(
     message: Message,
     schedule_repo: ScheduleRepository,
