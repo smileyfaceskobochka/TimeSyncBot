@@ -29,8 +29,8 @@ user_router = Router()
 
 @user_router.message(Command("meet"))
 async def cmd_meet(
-    message: Message, 
-    schedule_repo: ScheduleRepository, 
+    message: Message,
+    schedule_repo: ScheduleRepository,
     service: ScheduleService
 ):
     """
@@ -39,16 +39,16 @@ async def cmd_meet(
     Пример 2: /meet ИВТб ПИб 25.10
     """
     args = message.text.split()[1:] # Убираем саму команду /meet
-    
+
     if len(args) < 2:
         return await message.answer(
             "⚠️ Использование: <code>/meet Группа1 Группа2 [Дата]</code>\n"
             "Пример: <code>/meet ИВТб ПИб</code>"
         )
-    
+
     # Пытаемся понять, является ли последний аргумент датой
     target_date = parse_date(args[-1])
-    
+
     if target_date:
         # Если последний аргумент — дата, группы — это всё, что до него
         group_names = args[:-1]
@@ -64,7 +64,7 @@ async def cmd_meet(
         found = await schedule_repo.search_groups(g)
         if found:
             # Берем самое точное совпадение
-            valid_groups.append(found[0]) 
+            valid_groups.append(found[0])
         else:
             return await message.answer(f"❌ Группа <b>{g}</b> не найдена в базе.")
 
@@ -73,7 +73,7 @@ async def cmd_meet(
 
     # Вызываем нашу новую функцию
     result_text = await service.find_common_free_slots(schedule_repo, valid_groups, target_date)
-    
+
     await message.answer(result_text)
 # ================= БАЗОВАЯ ЛОГИКА ГЛАВНОГО МЕНЮ =================
 async def show_main_menu(
@@ -142,13 +142,15 @@ async def cmd_start(
             full_name=message.from_user.full_name,
         )
         await user_repo.upsert_user(user)
-        
+
     bot_settings = await user_repo.get_settings()
+    # Неудобно
     # Отправляем приветствие с постоянной клавиатурой под полем ввода
-    await message.answer(
-        "👋 Используйте кнопки внизу для быстрого доступа к расписанию:",
-        reply_markup=get_main_reply_kb()
-    )
+    # await message.answer(
+    #     "👋 Используйте кнопки внизу для быстрого доступа к расписанию:",
+    #     reply_markup=get_main_reply_kb()
+    # )
+    # Неудобно
     await show_main_menu(message, user, bot_settings, state)
 
 # ================= ОБРАБОТЧИК КОМАНДЫ /help =================
@@ -337,21 +339,21 @@ async def process_group_search(
         message.from_user.id, "search_group", message.text.strip()
     )
     results = await schedule_repo.search_groups(message.text.strip())
-    
+
     # Fallback: if no active lessons found, search in general university list
     fast_results = await schedule_repo.search_tracked_groups(message.text.strip())
-    
+
     if not results and not fast_results:
         # Auto-recovery: If DB is empty because startup sync failed, try to sync now
         tracked_count = await schedule_repo.get_tracked_groups_count()
         if tracked_count == 0:
             from tgbot.services.parser.site_to_pdf import sync_groups_list
             sync_msg = await message.answer("🔄 Загрузка списка групп с сайта ВятГУ, пожалуйста, подождите...")
-            sync_ok = await sync_groups_list() # Uses default config.DB_NAME 
+            sync_ok = await sync_groups_list() # Uses default config.DB_NAME
             await sync_msg.delete()
             if sync_ok:
                 fast_results = await schedule_repo.search_tracked_groups(message.text.strip())
-                
+
         if not results and not fast_results:
             # Проверяем, не связано ли это с недоступностью сайта
             from tgbot.services.parser.site_to_pdf import check_website_status
@@ -364,7 +366,7 @@ async def process_group_search(
             return await message.answer(
                 "⚠️ Группы не найдены. Попробуйте ввести название точнее (например: ИВТб)."
             )
-    
+
     # Show all matching groups from university catalogue with pagination
     groups_to_show = fast_results if fast_results else results
     await state.update_data(search_results=groups_to_show, search_action="change_group", current_page=1)
@@ -384,18 +386,18 @@ async def paginate_groups(
     groups = data.get("search_results", [])
     if not groups:
         return await callback.answer("Список устарел. Выполните поиск заново.", show_alert=True)
-    
+
     action = data.get("search_action", "change_group")
     selected_groups = data.get("selected_groups", [])
     new_page = callback_data.page
-    
+
     await state.update_data(current_page=new_page)
     try:
         await callback.message.edit_reply_markup(
             reply_markup=get_group_selection_kb(
-                groups, 
-                action=action, 
-                selected_groups=selected_groups, 
+                groups,
+                action=action,
+                selected_groups=selected_groups,
                 page=new_page
             )
         )
@@ -417,7 +419,7 @@ async def change_group(
     await analytics_repo.log_action(
         callback.from_user.id, "set_group", group_name
     )
-    
+
     # Check if lessons exist for this group. If not, auto-download on demand!
     has_lessons = await schedule_repo.has_lessons_for_group(group_name)
     if not has_lessons:
@@ -476,18 +478,18 @@ async def toggle_group_for_parsing(
     """
     data = await state.get_data()
     selected = data.get("selected_groups", [])
-    
+
     group_name = callback_data.name
     if group_name in selected:
         selected.remove(group_name)
     else:
         selected.append(group_name)
-    
+
     await state.update_data(selected_groups=selected)
-    
+
     results = data.get("search_results", [])
     current_page = callback_data.page or data.get("current_page", 1)
-    
+
     await callback.message.edit_reply_markup(
         reply_markup=get_group_selection_kb(results, action="toggle_parse", selected_groups=selected, page=current_page)
     )
@@ -505,45 +507,45 @@ async def confirm_multi_parse(
     """
     data = await state.get_data()
     selected_groups = data.get("selected_groups", [])
-    
+
     if not selected_groups:
         return await callback.answer("⚠️ Выберите хотя бы одну группу!", show_alert=True)
-    
+
     # 1. Check rate limit
     is_allowed, remaining = parser_rate_limiter.check_limit(callback.from_user.id)
     if not is_allowed:
         minutes = remaining // 60
         seconds = remaining % 60
         return await callback.answer(
-            f"⏳ Пожалуйста, подождите {minutes} мин {seconds} сек перед следующим запросом расписания.", 
+            f"⏳ Пожалуйста, подождите {minutes} мин {seconds} сек перед следующим запросом расписания.",
             show_alert=True
         )
 
     # 1. Помечаем группы как отслеживаемые
     for group_name in selected_groups:
         await schedule_repo.set_group_tracked(group_name, is_tracked=True)
-    
+
     # 2. Инициализируем прогресс-репортер
     from tgbot.services.parser.progress import ProgressReporter
     progress = ProgressReporter(callback.message)
-    
+
     # 3. Запускаем пайплайн для списка групп
     num = len(selected_groups)
     await progress.report(f"⏳ Начинаю загрузку расписания для {num} групп...", 0.0)
-    
+
     try:
         from tgbot.services.parser.runner import run_pipeline
         from tgbot.database.repositories import DatabaseManager
         db_manager = DatabaseManager(config.DB_NAME)
         # Мы обновим run_pipeline чтобы он принимал список
         await run_pipeline(db_manager=db_manager, group_keywords=selected_groups, progress=progress)
-        
+
         # 4. Если выбрана была только одна группа, установим её как основную
         user = await user_repo.get_user(callback.from_user.id)
         if not user:
              from tgbot.database.models import User
              user = User(telegram_id=callback.from_user.id, username=callback.from_user.username, full_name=callback.from_user.full_name)
-        
+
         if len(selected_groups) == 1:
             user.group_name = selected_groups[0]
             await user_repo.upsert_user(user)
@@ -572,50 +574,50 @@ async def parse_group_ondemand(
     schedule_repo: ScheduleRepository, # FIX: use injected repo
     state: FSMContext,
 ):
-    # Одиночный парсинг теперь тоже может идти через тумблеры, 
+    # Одиночный парсинг теперь тоже может идти через тумблеры,
     # но если нажали конкретную кнопку "Загрузить его сейчас" из быстрого ответа,
     # мы можем либо сразу его запустить, либо перевести в режим выбора.
     # Для простоты - запустим сразу.
-    
+
     # Check rate limit
     is_allowed, remaining = parser_rate_limiter.check_limit(callback.from_user.id)
     if not is_allowed:
         minutes = remaining // 60
         seconds = remaining % 60
         return await callback.answer(
-            f"⏳ Пожалуйста, подождите {minutes} мин {seconds} сек перед следующим запросом расписания.", 
+            f"⏳ Пожалуйста, подождите {minutes} мин {seconds} сек перед следующим запросом расписания.",
             show_alert=True
         )
-        
+
     group_name = callback_data.name
     await schedule_repo.set_group_tracked(group_name, is_tracked=True)
-    
+
     from tgbot.services.parser.progress import ProgressReporter
     progress = ProgressReporter(callback.message)
-    
+
     await progress.report(f"⏳ Начинаю загрузку расписания для {group_name}...", 0.0)
-    
+
     try:
         from tgbot.services.parser.runner import run_pipeline
         from tgbot.database.repositories import DatabaseManager
         db_manager = DatabaseManager(config.DB_NAME)
         await run_pipeline(db_manager=db_manager, group_keywords=[group_name], progress=progress)
-        
+
         user = await user_repo.get_user(callback.from_user.id)
         if not user:
              from tgbot.database.models import User
              user = User(telegram_id=callback.from_user.id, username=callback.from_user.username, full_name=callback.from_user.full_name)
-        
+
         user.group_name = group_name
         await user_repo.upsert_user(user)
-        
+
         await state.clear()
         await callback.message.edit_text(
             f"✅ Расписание для группы <b>{group_name}</b> успешно загружено и установлено!",
             reply_markup=get_schedule_hub_kb(group_name)
         )
         parser_rate_limiter.record_usage(callback.from_user.id)
-        
+
     except Exception as e:
         logging.error(f"Error in on-demand parsing: {e}")
         await callback.message.edit_text(f"❌ Произошла ошибка при загрузке: {e}")
