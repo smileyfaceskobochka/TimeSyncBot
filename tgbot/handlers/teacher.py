@@ -703,12 +703,12 @@ def _format_teacher_schedule_chunks(
         except ValueError:
             header = f"📅 <b>{d_str}:</b>"
 
-        day_lines = [header]
         sorted_pairs = sorted(day_lessons, key=lambda x: x.get("pair_number") or 0)
-        for l in sorted_pairs:
-            day_lines.append(_format_teacher_pair(l))
-
-        day_blocks.append("\n".join(day_lines))
+        pair_lines = [_format_teacher_pair(l) for l in sorted_pairs]
+        if pair_lines:
+            day_blocks.append(f"{header}\n<blockquote expandable>\n" + "\n".join(pair_lines) + "\n</blockquote>")
+        else:
+            day_blocks.append(f"{header}\n<i>Пар нет</i>")
 
     chunks: List[str] = []
     curr = f"👨‍🏫 Преподаватель: <b>{teacher_name}</b>\n"

@@ -102,10 +102,11 @@ async def show_schedule_for_group(
     lessons, is_predicted = await schedule_repo.get_lessons_with_status(group_name, target_date)
     is_fav = bool(user and group_name in user.favorites)
     is_my = bool(user and user.group_name == group_name)
+    rooms_copy = service.format_locations(lessons)
 
     await callback.message.edit_text(
         service.format_day(lessons, target_date, group_name, settings, is_predicted=is_predicted),
-        reply_markup=get_schedule_hub_kb(group_name, current_date=target_date, is_favorite=is_fav, is_my_group=is_my),
+        reply_markup=get_schedule_hub_kb(group_name, current_date=target_date, is_favorite=is_fav, is_my_group=is_my, rooms_copy_text=rooms_copy),
     )
 
 
@@ -266,8 +267,9 @@ async def process_custom_date(
     await state.clear()
     lessons, is_predicted = await schedule_repo.get_lessons_with_status(group, chosen_date)
     settings = user.settings if user else {}
+    rooms_copy = service.format_locations(lessons)
 
     await message.answer(
         service.format_day(lessons, chosen_date, group, settings, is_predicted=is_predicted),
-        reply_markup=get_schedule_hub_kb(group, is_favorite=is_fav, is_my_group=is_my),
+        reply_markup=get_schedule_hub_kb(group, current_date=chosen_date, is_favorite=is_fav, is_my_group=is_my, rooms_copy_text=rooms_copy),
     )

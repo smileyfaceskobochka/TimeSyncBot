@@ -14,7 +14,7 @@ from aiogram.types import (
 )
 
 from tgbot.database.repositories import ScheduleRepository, UserRepository
-from tgbot.services.services import ScheduleService
+from tgbot.services.services import ScheduleService, format_week_schedule_expandable
 from tgbot.handlers.teacher import fetch_teacher_lessons, _format_teacher_day
 
 inline_router = Router()
@@ -73,6 +73,26 @@ async def handle_inline_query(
                     )
                 )
             )
+            # Вся неделя
+            monday = today - timedelta(days=today.weekday())
+            sunday = monday + timedelta(days=6)
+            my_week_data = []
+            for i in range(7):
+                d = monday + timedelta(days=i)
+                d_lessons, is_p = await schedule_repo.get_lessons_with_status(user.group_name, d)
+                my_week_data.append((d, d_lessons, is_p))
+            text_week = format_week_schedule_expandable(my_week_data, user.group_name, monday, sunday)
+            results.append(
+                InlineQueryResultArticle(
+                    id=f"my_week_{monday.isoformat()}",
+                    title=f"📆 {user.group_name} — Вся неделя",
+                    description="Отправить недельное расписание с цитатами",
+                    input_message_content=InputTextMessageContent(
+                        message_text=text_week,
+                        parse_mode="HTML"
+                    )
+                )
+            )
 
         bot_user = await inline_query.bot.me()
         bot_uname = bot_user.username or "vyatsuts_bot"
@@ -121,6 +141,27 @@ async def handle_inline_query(
                 description=f"Расписание группы {grp} на завтра",
                 input_message_content=InputTextMessageContent(
                     message_text=text_tmrw,
+                    parse_mode="HTML"
+                )
+            )
+        )
+
+        # Вся неделя
+        monday = today - timedelta(days=today.weekday())
+        sunday = monday + timedelta(days=6)
+        grp_week_data = []
+        for i in range(7):
+            d = monday + timedelta(days=i)
+            d_lessons, is_p = await schedule_repo.get_lessons_with_status(grp, d)
+            grp_week_data.append((d, d_lessons, is_p))
+        text_week = format_week_schedule_expandable(grp_week_data, grp, monday, sunday)
+        results.append(
+            InlineQueryResultArticle(
+                id=hashlib.md5(f"{grp}_week_{monday.isoformat()}".encode()).hexdigest(),
+                title=f"📆 {grp} — Вся неделя",
+                description=f"Расписание группы {grp} на неделю",
+                input_message_content=InputTextMessageContent(
+                    message_text=text_week,
                     parse_mode="HTML"
                 )
             )
