@@ -18,7 +18,7 @@ from tgbot.database.models import GroupChat
 from tgbot.database.repositories import GroupChatRepository, ScheduleRepository, AnalyticsRepository
 from tgbot.keyboards.callback_data import GroupChatCb, GroupSelectCb
 from tgbot.keyboards.inline import get_group_chat_settings_kb
-from tgbot.services.services import ScheduleService
+from tgbot.services.services import ScheduleService, format_week_schedule_expandable
 
 group_chat_router = Router()
 # Filter all message events in this router to only apply to group and supergroup chats
@@ -318,28 +318,27 @@ async def cmd_group_week(
             "Администратор может привязать её командой:\n<code>/setgroup НазваниеГруппы</code>"
         )
 
-    service = ScheduleService()
     today = date.today()
-    monday = today - timedelta(days=today.weekday())
-    sunday = monday + timedelta(days=6)
+    start_date = today - timedelta(days=today.weekday())
+    end_date = start_date + timedelta(days=6)
 
-    text_parts = [
-        f"📆 <b>Расписание на неделю ({monday.strftime('%d.%m')} — {sunday.strftime('%d.%m')})</b>\nГруппа: {chat.group_name}\n"
-    ]
-
-    has_any = False
+    week_data = []
     for i in range(7):
-        day_date = monday + timedelta(days=i)
+        day_date = start_date + timedelta(days=i)
         lessons, is_predicted = await schedule_repo.get_lessons_with_status(chat.group_name, day_date)
-        if lessons:
-            has_any = True
-            day_text = service.format_day(lessons, day_date, chat.group_name, is_predicted=is_predicted)
-            text_parts.append(day_text)
+        week_data.append((day_date, lessons, is_predicted))
 
-    if not has_any:
-        text_parts.append("🎉 На эту неделю занятий нет!")
-
-    await message.answer("\n\n".join(text_parts))
+    week_text = format_week_schedule_expandable(week_data, chat.group_name, start_date, end_date)
+    sent_msg = await message.answer(week_text)
+    if chat and getattr(chat, 'pin_replies', False):
+        try:
+            await message.bot.pin_chat_message(
+                chat_id=message.chat.id,
+                message_id=sent_msg.message_id,
+                disable_notification=True
+            )
+        except Exception as pin_err:
+            logging.debug(f"Не удалось закрепить ответ в {message.chat.id}: {pin_err}")
 
 
 @group_chat_router.message(Command("next_week", "nextweek", "след_неделя", "следующая_неделя"))
@@ -355,28 +354,27 @@ async def cmd_group_next_week(
             "Администратор может привязать её командой:\n<code>/setgroup НазваниеГруппы</code>"
         )
 
-    service = ScheduleService()
     today = date.today()
-    monday = today - timedelta(days=today.weekday()) + timedelta(days=7)
-    sunday = monday + timedelta(days=6)
+    start_date = today - timedelta(days=today.weekday()) + timedelta(days=7)
+    end_date = start_date + timedelta(days=6)
 
-    text_parts = [
-        f"📆 <b>Расписание на следующую неделю ({monday.strftime('%d.%m')} — {sunday.strftime('%d.%m')})</b>\nГруппа: {chat.group_name}\n"
-    ]
-
-    has_any = False
+    week_data = []
     for i in range(7):
-        day_date = monday + timedelta(days=i)
+        day_date = start_date + timedelta(days=i)
         lessons, is_predicted = await schedule_repo.get_lessons_with_status(chat.group_name, day_date)
-        if lessons:
-            has_any = True
-            day_text = service.format_day(lessons, day_date, chat.group_name, is_predicted=is_predicted)
-            text_parts.append(day_text)
+        week_data.append((day_date, lessons, is_predicted))
 
-    if not has_any:
-        text_parts.append("🎉 На следующую неделю занятий нет!")
-
-    await message.answer("\n\n".join(text_parts))
+    week_text = format_week_schedule_expandable(week_data, chat.group_name, start_date, end_date)
+    sent_msg = await message.answer(week_text)
+    if chat and getattr(chat, 'pin_replies', False):
+        try:
+            await message.bot.pin_chat_message(
+                chat_id=message.chat.id,
+                message_id=sent_msg.message_id,
+                disable_notification=True
+            )
+        except Exception as pin_err:
+            logging.debug(f"Не удалось закрепить ответ в {message.chat.id}: {pin_err}")
 
 
 def _get_settings_text(chat: GroupChat) -> str:
