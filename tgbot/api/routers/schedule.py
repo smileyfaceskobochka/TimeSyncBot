@@ -34,7 +34,7 @@ async def get_group_schedule(
     ),
     repo: ScheduleRepository = Depends(get_schedule_repo),
 ) -> ScheduleResponse:
-    clean_group = group_name.strip()
+    clean_group = await repo.resolve_canonical_group_name(group_name.strip())
     if not clean_group:
         raise HTTPException(status_code=400, detail="Group name must not be empty.")
 

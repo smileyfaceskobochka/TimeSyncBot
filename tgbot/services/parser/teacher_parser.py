@@ -578,11 +578,37 @@ class TeacherMappingManager:
         """Returns all unique mapped teacher names."""
         return list(self._teacher_names)
 
+    def resolve_teacher_name(self, query: str) -> str:
+        """Resolves teacher name to canonical casing from mapped university teachers."""
+        clean = query.strip()
+        if not clean:
+            return clean
+        if clean in self._teacher_to_depts:
+            return clean
+        clean_lower = clean.lower()
+        for name in self._teacher_names:
+            if name.lower() == clean_lower:
+                return name
+        for name in self._teacher_names:
+            if name.lower().startswith(clean_lower):
+                return name
+        for name in self._teacher_names:
+            if clean_lower in name.lower():
+                return name
+        return clean
+
     def get_teacher_department(self, teacher_name: str) -> Optional[str]:
-        """Returns the primary department name for a teacher."""
+        """Returns the primary department name for a teacher (case-insensitive)."""
         depts = self._teacher_to_depts.get(teacher_name)
         if depts:
             return next(iter(depts))
+        canonical = self.resolve_teacher_name(teacher_name)
+        canonical_depts = self._teacher_to_depts.get(canonical)
+        if canonical_depts:
+            return next(iter(canonical_depts))
+        for t, d_set in self._teacher_to_depts.items():
+            if t.lower() == teacher_name.lower():
+                return next(iter(d_set))
         return None
 
     def get_teacher_departments(self, teacher_name: str) -> List[str]:
@@ -678,24 +704,30 @@ class TeacherMappingManager:
         if target_date is None:
             target_date = date.today()
 
-        # 1. Check in-memory teacher lessons cache
-        if teacher_name in self._teacher_lessons_cache:
+        # 1. Ensure mapping is built
+        if not self.is_mapped():
+            await self.ensure_mapping()
+
+        canonical_teacher = self.resolve_teacher_name(teacher_name)
+
+        # 2. Check in-memory teacher lessons cache
+        if canonical_teacher in self._teacher_lessons_cache:
+            ts, cached = self._teacher_lessons_cache[canonical_teacher]
+            if (now - ts) < 3600:
+                return cached
+        elif teacher_name in self._teacher_lessons_cache:
             ts, cached = self._teacher_lessons_cache[teacher_name]
             if (now - ts) < 3600:
                 return cached
 
-        # 2. Ensure mapping is built
-        if not self.is_mapped():
-            await self.ensure_mapping()
-
         # 3. Find ALL target curriculum reports for this teacher (a teacher may
         #    belong to several departments and thus have several reports)
         reps = [
-            rep for rep in self.get_teacher_reports_for_date(teacher_name, target_date)
+            rep for rep in self.get_teacher_reports_for_date(canonical_teacher, target_date)
             if rep and rep.get("html_url")
         ]
         if reps:
-            default_dept = self.get_teacher_department(teacher_name) or ""
+            default_dept = self.get_teacher_department(canonical_teacher) or ""
 
             async with aiohttp.ClientSession(
                 headers=config.HTTP_HEADERS,

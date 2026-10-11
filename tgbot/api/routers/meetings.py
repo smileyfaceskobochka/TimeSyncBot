@@ -50,7 +50,8 @@ async def find_common_free_slots(
     else:
         target_date = date.today()
 
-    lessons = await repo.get_lessons_for_groups(group_list, target_date)
+    resolved_groups = [await repo.resolve_canonical_group_name(g) for g in group_list]
+    lessons = await repo.get_lessons_for_groups(resolved_groups, target_date)
     occupied_pairs = sorted({l.pair_number for l in lessons if l.pair_number})
 
     all_pairs = set(range(1, 8))

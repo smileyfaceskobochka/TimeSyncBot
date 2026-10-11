@@ -84,6 +84,7 @@ async def get_teacher_schedule(
     if not teacher_mapping_manager.is_mapped():
         await teacher_mapping_manager.ensure_mapping()
 
+    clean_teacher = teacher_mapping_manager.resolve_teacher_name(clean_teacher)
     dept = teacher_mapping_manager.get_teacher_department(clean_teacher)
 
     if date_str:
@@ -152,6 +153,7 @@ async def get_teacher_curriculum(
     if not teacher_mapping_manager.is_mapped():
         await teacher_mapping_manager.ensure_mapping()
 
+    clean_teacher = teacher_mapping_manager.resolve_teacher_name(clean_teacher)
     dept = teacher_mapping_manager.get_teacher_department(clean_teacher)
     raw_curriculum = teacher_mapping_manager.get_teacher_curriculum(clean_teacher)
 

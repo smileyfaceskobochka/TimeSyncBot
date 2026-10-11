@@ -275,6 +275,48 @@ class ScheduleRepository(BaseRepository):
                 return matches[:100]
         return await asyncio.to_thread(_sync_search)
 
+    async def resolve_canonical_group_name(self, query: str) -> str:
+        clean = query.strip()
+        if not clean:
+            return clean
+        clean_lower = clean.lower()
+
+        def _sync_resolve():
+            with self.db_manager.get_session() as session:
+                # 1. Exact match in TrackedGroup
+                stmt_tg = select(TrackedGroup.group_name).where(TrackedGroup.group_name == clean).limit(1)
+                res_tg = session.execute(stmt_tg).scalar_one_or_none()
+                if res_tg:
+                    return res_tg
+
+                # 2. Case-insensitive match in TrackedGroup
+                stmt_all_tg = select(TrackedGroup.group_name)
+                all_tg = list(session.execute(stmt_all_tg).scalars().all())
+                for g in all_tg:
+                    if g and g.lower() == clean_lower:
+                        return g
+
+                # 3. Exact match in Lesson
+                stmt_l = select(Lesson.group_name).where(Lesson.group_name == clean).limit(1)
+                res_l = session.execute(stmt_l).scalar_one_or_none()
+                if res_l:
+                    return res_l
+
+                # 4. Case-insensitive match in Lesson
+                stmt_all_l = select(Lesson.group_name).distinct()
+                for g in session.execute(stmt_all_l).scalars().all():
+                    if g and g.lower() == clean_lower:
+                        return g
+
+                # 5. Starts-with match in TrackedGroup
+                for g in all_tg:
+                    if g and g.lower().startswith(clean_lower):
+                        return g
+
+                return clean
+
+        return await asyncio.to_thread(_sync_resolve)
+
     async def search_teachers(self, query: str) -> List[str]:
         query_clean = query.strip().lower()
         if not query_clean: return []
