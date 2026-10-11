@@ -21,6 +21,8 @@ async def setup_bot_metadata(bot: Bot):
         private_commands = [
             BotCommand(command="start", description="Главное меню"),
             BotCommand(command="schedule", description="Моё расписание"),
+            BotCommand(command="week", description="Расписание на неделю"),
+            BotCommand(command="next_week", description="Следующая неделя"),
             BotCommand(command="search", description="Поиск расписания группы"),
             BotCommand(command="teacher", description="Поиск преподавателя"),
             BotCommand(command="free", description="Свободные аудитории"),
@@ -36,6 +38,7 @@ async def setup_bot_metadata(bot: Bot):
             BotCommand(command="today", description="Расписание на сегодня"),
             BotCommand(command="tomorrow", description="Расписание на завтра"),
             BotCommand(command="week", description="Расписание на неделю"),
+            BotCommand(command="next_week", description="Следующая неделя"),
             BotCommand(command="settings", description="⚙️ Настройки рассылки (для админов)"),
             BotCommand(command="help", description="Справка по командам чата"),
         ]

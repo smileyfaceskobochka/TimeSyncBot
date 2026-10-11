@@ -53,6 +53,32 @@ class ScheduleService:
             lines.append(f"▫️ <b>{p} пара</b>: <code>{config.STANDARD_PAIRS.get(p, '??:?? - ??:??')}</code>")
 
         return "\n".join(lines)
+
+    def format_lesson_notification(self, lesson: Lesson, minutes_left: int = 15) -> str:
+        """Форматирует компактное уведомление о скором начале пары."""
+        pair_num = lesson.pair_number or "?"
+        time_str = f"{lesson.start_time}-{lesson.end_time}" if lesson.start_time and lesson.end_time else (lesson.start_time or "??:??")
+        subj = lesson.subject or "Занятие"
+        c_type = f" ({lesson.class_type})" if lesson.class_type else ""
+        
+        parts = [f"⏰ <b>Через {minutes_left} минут начнётся {pair_num} пара!</b>\n"]
+        parts.append(f"📚 <b>{subj}</b>{c_type}")
+        parts.append(f"🕒 Время: <code>{time_str}</code>")
+        
+        if lesson.building or lesson.room:
+            b_str = lesson.building or ""
+            r_str = lesson.room or ""
+            loc = f"{b_str}-{r_str}" if b_str and r_str else (b_str or r_str)
+            parts.append(f"📍 Аудитория: <b>{loc}</b>")
+            
+        if lesson.teacher:
+            parts.append(f"👤 Преподаватель: <i>{lesson.teacher}</i>")
+            
+        if lesson.subgroup:
+            parts.append(f"👥 Подгруппа: <i>{lesson.subgroup}</i>")
+            
+        return "\n".join(parts)
+
     def format_day(
         self,
         lessons: List[Lesson],

@@ -342,6 +342,43 @@ async def cmd_group_week(
     await message.answer("\n\n".join(text_parts))
 
 
+@group_chat_router.message(Command("next_week", "nextweek", "след_неделя", "следующая_неделя"))
+async def cmd_group_next_week(
+    message: Message, 
+    group_chat_repo: GroupChatRepository, 
+    schedule_repo: ScheduleRepository
+):
+    chat = await group_chat_repo.get_chat(message.chat.id)
+    if not chat:
+        return await message.reply(
+            "⚠️ К этому чату ещё не привязана учебная группа.\n"
+            "Администратор может привязать её командой:\n<code>/setgroup НазваниеГруппы</code>"
+        )
+
+    service = ScheduleService()
+    today = date.today()
+    monday = today - timedelta(days=today.weekday()) + timedelta(days=7)
+    sunday = monday + timedelta(days=6)
+
+    text_parts = [
+        f"📆 <b>Расписание на следующую неделю ({monday.strftime('%d.%m')} — {sunday.strftime('%d.%m')})</b>\nГруппа: {chat.group_name}\n"
+    ]
+
+    has_any = False
+    for i in range(7):
+        day_date = monday + timedelta(days=i)
+        lessons, is_predicted = await schedule_repo.get_lessons_with_status(chat.group_name, day_date)
+        if lessons:
+            has_any = True
+            day_text = service.format_day(lessons, day_date, chat.group_name, is_predicted=is_predicted)
+            text_parts.append(day_text)
+
+    if not has_any:
+        text_parts.append("🎉 На следующую неделю занятий нет!")
+
+    await message.answer("\n\n".join(text_parts))
+
+
 def _get_settings_text(chat: GroupChat) -> str:
     topic_str = f"#{chat.topic_id}" if chat.topic_id else "Основной чат"
     pin_broadcast_str = "Да" if chat.pin_message else "Нет"

@@ -110,6 +110,7 @@ async def main():
         schedule_repo=schedule_repo,
         analytics_repo=analytics_repo,
         group_chat_repo=group_chat_repo,
+        user_repo=user_repo,
         bot=bot
     )
     parser_scheduler.start()

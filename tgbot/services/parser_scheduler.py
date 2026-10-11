@@ -13,6 +13,7 @@ class ParserSchedulerService:
         schedule_repo=None, 
         analytics_repo=None, 
         group_chat_repo=None,
+        user_repo=None,
         bot=None,
         run_on_startup: bool = False
     ):
@@ -22,6 +23,7 @@ class ParserSchedulerService:
             schedule_repo: Schedule repository instance
             analytics_repo: Analytics repository instance
             group_chat_repo: Group chat repository instance
+            user_repo: User repository instance
             bot: Bot instance for sending scheduled messages
             run_on_startup: Запускать ли парсер сразу при старте бота
         """
@@ -30,10 +32,12 @@ class ParserSchedulerService:
         self.schedule_repo = schedule_repo
         self.analytics_repo = analytics_repo
         self.group_chat_repo = group_chat_repo
+        self.user_repo = user_repo
         self.bot = bot
         self.run_on_startup = run_on_startup
         self.last_run = None
         self.last_status = None
+        self._sent_lesson_alerts = set()  # (date_str, user_id, pair_number)
         self.stats = {
             "total_runs": 0,
             "successful_runs": 0,
@@ -201,6 +205,151 @@ class ParserSchedulerService:
                 else:
                     logging.error(f"❌ Ошибка отправки расписания в чат {chat.chat_id}: {e}")
 
+    async def run_user_daily_broadcast(self):
+        """Ежеминутная проверка личной ежедневной рассылки расписания в ЛС бота"""
+        if not self.bot or not self.user_repo or not self.schedule_repo:
+            return
+
+        now = datetime.now()
+        current_time_str = now.strftime("%H:%M")
+
+        try:
+            users = await self.user_repo.get_all_users_with_group()
+        except Exception as e:
+            logging.error(f"Error fetching users for daily broadcast: {e}")
+            return
+
+        matching_users = [
+            u for u in users 
+            if u.settings.notify_daily and getattr(u.settings, 'notify_daily_time', '07:30') == current_time_str
+        ]
+
+        if not matching_users:
+            return
+
+        logging.info(f"📬 Личная рассылка: найдено {len(matching_users)} пользователей на {current_time_str}")
+        from tgbot.services.services import ScheduleService
+        service = ScheduleService()
+        target_date = now.date()
+
+        for user in matching_users:
+            try:
+                lessons, is_predicted = await self.schedule_repo.get_lessons_with_status(user.group_name, target_date)
+                
+                # Если воскресенье и занятий нет — не беспокоим
+                if target_date.weekday() == 6 and not lessons:
+                    continue
+
+                formatted_day = service.format_day(
+                    lessons, 
+                    target_date, 
+                    user.group_name, 
+                    settings=user.settings,
+                    is_predicted=is_predicted
+                )
+
+                msg_text = (
+                    f"🔔 <b>Ваше расписание на сегодня</b>\n\n"
+                    f"{formatted_day}"
+                )
+
+                await self.bot.send_message(
+                    chat_id=user.telegram_id,
+                    text=msg_text
+                )
+            except Exception as e:
+                err_str = str(e).lower()
+                if "forbidden" in err_str or "blocked" in err_str or "deactivated" in err_str:
+                    logging.warning(f"🚫 Пользователь {user.telegram_id} заблокировал бота. Отключаем личные уведомления.")
+                    user.settings.notify_daily = False
+                    user.settings.notify_before_lesson = False
+                    await self.user_repo.upsert_user(user)
+                else:
+                    logging.error(f"❌ Ошибка отправки расписания пользователю {user.telegram_id}: {e}")
+
+    async def run_lesson_start_alerts(self):
+        """Ежеминутная проверка скорого начала пар для отправки напоминаний в ЛС"""
+        if not self.bot or not self.user_repo or not self.schedule_repo:
+            return
+
+        from tgbot.config import config
+        from tgbot.services.services import ScheduleService
+        from datetime import timedelta
+
+        now = datetime.now()
+        today = now.date()
+        today_str = today.isoformat()
+
+        # Очищаем устаревший кэш за прошлые дни
+        self._sent_lesson_alerts = {item for item in self._sent_lesson_alerts if item[0] == today_str}
+
+        try:
+            users = await self.user_repo.get_all_users_with_group()
+        except Exception as e:
+            logging.error(f"Error fetching users for lesson start alerts: {e}")
+            return
+
+        alert_users = [u for u in users if u.settings.notify_before_lesson]
+        if not alert_users:
+            return
+
+        service = ScheduleService()
+
+        # Группируем пользователей по группам, чтобы минимизировать запросы к БД расписания
+        from collections import defaultdict
+        group_to_users = defaultdict(list)
+        for u in alert_users:
+            group_to_users[u.group_name].append(u)
+
+        for grp_name, u_list in group_to_users.items():
+            try:
+                lessons, _ = await self.schedule_repo.get_lessons_with_status(grp_name, today)
+                if not lessons:
+                    continue
+
+                for lesson in lessons:
+                    p_num = lesson.pair_number
+                    start_str = lesson.start_time
+                    if not start_str and p_num in config.STANDARD_PAIR_STARTS:
+                        start_str = config.STANDARD_PAIR_STARTS[p_num]
+
+                    if not start_str or ":" not in start_str:
+                        continue
+
+                    try:
+                        sh, sm = map(int, start_str.split(":")[:2])
+                        lesson_dt = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+                    except ValueError:
+                        continue
+
+                    diff_minutes = int((lesson_dt - now).total_seconds() / 60)
+
+                    for user in u_list:
+                        target_lead = getattr(user.settings, 'notify_before_minutes', 15)
+                        # Проверяем попадание в окно оповещения (например ровно за 15 минут)
+                        if 0 <= diff_minutes <= target_lead:
+                            alert_key = (today_str, user.telegram_id, p_num or lesson.subject)
+                            if alert_key in self._sent_lesson_alerts:
+                                continue
+
+                            # Формируем и шлем алерт
+                            alert_text = service.format_lesson_notification(lesson, minutes_left=diff_minutes)
+                            try:
+                                await self.bot.send_message(
+                                    chat_id=user.telegram_id,
+                                    text=alert_text
+                                )
+                                self._sent_lesson_alerts.add(alert_key)
+                            except Exception as e:
+                                err_str = str(e).lower()
+                                if "forbidden" in err_str or "blocked" in err_str:
+                                    user.settings.notify_before_lesson = False
+                                    await self.user_repo.upsert_user(user)
+                                else:
+                                    logging.error(f"❌ Ошибка отправки алерта о паре {user.telegram_id}: {e}")
+            except Exception as e:
+                logging.error(f"Error checking lesson alerts for group {grp_name}: {e}")
+
     def start(self, interval_hours: int = 12):
         """
         Запускает планировщик парсера.
@@ -260,6 +409,21 @@ class ParserSchedulerService:
                 minute="*",
                 id="group_chat_broadcast_job"
             )
+
+        # Личная рассылка и напоминания о парах в ЛС (каждую минуту)
+        if self.user_repo and self.bot:
+            self.scheduler.add_job(
+                self.run_user_daily_broadcast,
+                "cron",
+                minute="*",
+                id="user_daily_broadcast_job"
+            )
+            self.scheduler.add_job(
+                self.run_lesson_start_alerts,
+                "cron",
+                minute="*",
+                id="user_lesson_alerts_job"
+            )
         
         self.scheduler.start()
         logging.info(f"⚙️ Планировщик парсера запущен")
@@ -269,6 +433,8 @@ class ParserSchedulerService:
         logging.info(f"   🧹 Job 4: Плановое обслуживание - каждое воскресенье в 4:00 AM")
         if self.group_chat_repo and self.bot:
             logging.info(f"   📢 Job 5: Авторассылка в группы - каждую минуту")
+        if self.user_repo and self.bot:
+            logging.info(f"   🔔 Job 6: Личные уведомления и алерты в ЛС - каждую минуту")
         
         # Запуск парсера сразу при старте (если включено)
         if self.run_on_startup:

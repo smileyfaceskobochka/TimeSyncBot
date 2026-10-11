@@ -182,7 +182,7 @@ async def _safe_delete_trigger(message: Message):
 
 
 @user_router.message(F.text.in_({"📅 Сегодня", "📆 Завтра", "🗓 Неделя"}))
-@user_router.message(Command("today", "tomorrow", "week", "сегодня", "завтра", "неделя"))
+@user_router.message(Command("today", "tomorrow", "week", "next_week", "nextweek", "сегодня", "завтра", "неделя", "след_неделя", "следующая_неделя"))
 async def handle_quick_schedule_text(
     message: Message,
     user_repo: UserRepository,
@@ -208,7 +208,23 @@ async def handle_quick_schedule_text(
     settings = user.settings if user else None
     is_fav = bool(user and group_name in user.favorites)
 
-    if "завтра" in text or "tomorrow" in text:
+    if "next" in text or "след" in text:
+        today = date.today()
+        # Понедельник следующей недели
+        start_date = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        end_date = start_date + timedelta(days=6)
+        week_data = []
+        for i in range(7):
+            d = start_date + timedelta(days=i)
+            d_lessons, is_pred = await schedule_repo.get_lessons_with_status(group_name, d)
+            week_data.append((d, d_lessons, is_pred))
+
+        week_text = format_week_schedule_expandable(week_data, group_name, start_date, end_date)
+        await message.answer(
+            week_text,
+            reply_markup=get_schedule_hub_kb(group_name, current_date=start_date, is_favorite=is_fav, is_my_group=True)
+        )
+    elif "завтра" in text or "tomorrow" in text:
         target_date = date.today() + timedelta(days=1)
         lessons, is_predicted = await schedule_repo.get_lessons_with_status(group_name, target_date)
         day_text = service.format_day(lessons, target_date, group_name, settings, is_predicted=is_predicted)

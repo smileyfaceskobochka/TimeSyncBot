@@ -191,6 +191,14 @@ class UserRepository(BaseRepository):
                 return list(result.scalars().all())
         return await asyncio.to_thread(_sync_get)
 
+    async def get_all_users_with_group(self) -> List[User]:
+        def _sync_get():
+            with self.db_manager.get_session() as session:
+                statement = select(User).where(User.group_name.is_not(None), User.group_name != "")
+                result = session.execute(statement)
+                return list(result.scalars().all())
+        return await asyncio.to_thread(_sync_get)
+
 class ScheduleRepository(BaseRepository):
     async def get_lessons_for_groups(self, group_names: List[str], target_date: date) -> List[Lesson]:
         if not group_names: return []

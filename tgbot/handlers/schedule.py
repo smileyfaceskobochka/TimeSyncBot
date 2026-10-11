@@ -140,8 +140,14 @@ async def navigate_schedule(
         await show_week_calendar(callback, group, state)
         return
 
-    if callback_data.action == "week":
-        start_date = current
+    if callback_data.action in ("week", "next_week"):
+        if callback_data.action == "next_week":
+            today = date.today()
+            start_date = today - timedelta(days=today.weekday()) + timedelta(days=7)
+        else:
+            today = date.today()
+            start_date = today - timedelta(days=today.weekday())
+            
         end_date = start_date + timedelta(days=6)
 
         week_data = []

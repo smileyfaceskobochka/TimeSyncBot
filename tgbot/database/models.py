@@ -9,6 +9,10 @@ class UserSettings(BaseModel):
     show_teachers: bool = True
     show_building: bool = True
     show_windows: bool = True
+    notify_daily: bool = False
+    notify_daily_time: str = "07:30"
+    notify_before_lesson: bool = False
+    notify_before_minutes: int = 15
 
 class User(SQLModel, table=True):
     telegram_id: int = Field(primary_key=True)

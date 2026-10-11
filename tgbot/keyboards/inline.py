@@ -206,11 +206,15 @@ def get_schedule_hub_kb(
         )
     )
 
-    # 2. Неделя и Календарь
+    # 2. Неделя, След. неделя и Календарь
     builder.row(
         InlineKeyboardButton(
-            text="📆 Вся неделя", 
+            text="📆 Неделя", 
             callback_data=ScheduleNav(action="week", current_date=current_date.isoformat(), group=group_name).pack()
+        ),
+        InlineKeyboardButton(
+            text="⏭️ След. неделя", 
+            callback_data=ScheduleNav(action="next_week", current_date=current_date.isoformat(), group=group_name).pack()
         ),
         InlineKeyboardButton(
             text="🗓 Календарь", 
@@ -252,10 +256,15 @@ def get_user_settings_kb(settings: UserSettings) -> InlineKeyboardMarkup:
         status = "✅" if getattr(settings, field) else "❌"
         return InlineKeyboardButton(text=f"{text}: {status}", callback_data=SettingCb(field=field).pack())
 
+    daily_time_str = getattr(settings, "notify_daily_time", "07:30")
+    pre_min_str = f"{getattr(settings, 'notify_before_minutes', 15)} мин"
+
     rows = [
-        [btn("Показывать преподавателей", "show_teachers")],
-        [btn("Показывать аудитории", "show_building")],
-        [btn("Показывать окна (своб. время)", "show_windows")],
+        [btn("👨‍🏫 Показывать преподавателей", "show_teachers")],
+        [btn("🏢 Показывать аудитории", "show_building")],
+        [btn("⏸️ Показывать окна", "show_windows")],
+        [btn(f"🔔 Утреннее расписание ({daily_time_str})", "notify_daily")],
+        [btn(f"⏰ Напоминание перед парой ({pre_min_str})", "notify_before_lesson")],
         [InlineKeyboardButton(text="🔎 Сменить группу", callback_data="search_start")],
         [InlineKeyboardButton(text="« Главное меню", callback_data="cmd_start")]
     ]
