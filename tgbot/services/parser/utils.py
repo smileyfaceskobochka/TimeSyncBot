@@ -12,7 +12,7 @@ def clean_string(text):
 
 # Pre-compiled regexes for maximum parsing speed
 RE_SUBGROUP = re.compile(r'\b(\d{1,2})\s*(?:подгруппа|п/г)', re.IGNORECASE)
-RE_TEACHER = re.compile(r'\b([А-ЯЁ][а-яё]+(?:\-[А-ЯЁ][а-яё]+)?\s+[А-ЯЁ]\.\s?[А-ЯЁ]\.?)')
+RE_TEACHER = re.compile(r'\b([А-ЯЁ][а-яё]+(?:\-[А-ЯЁ][а-яё]+)?\s+[А-ЯЁ]\.(?:\s?[А-ЯЁ]\.)?)')
 RE_LOCATION = re.compile(r'\b(\d{1,2}|ФОК|Гл\.|Спорт\.зал)\s*-\s*(\d{3,4}[а-яА-Я]?|[А-Яа-я]+)\b')
 RE_SHORT_CLASS_TYPES = re.compile(r'\b(лаб\.|пр\.|лек\.)', re.IGNORECASE)
 
@@ -81,7 +81,7 @@ def parse_lesson_details(raw_info, group_name):
         text = RE_SHORT_CLASS_TYPES.sub(' ', text)
 
     # 6. Предмет - всё, что осталось
-    subject = text.strip(" .,;").strip()
+    subject = text.strip(" .,;\"'").strip()
     subject = ' '.join(subject.split()) # Убрать двойные пробелы
     
     if len(subject) < 2: subject = None
