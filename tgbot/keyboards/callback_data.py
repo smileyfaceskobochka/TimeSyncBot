@@ -13,6 +13,12 @@ class ScheduleNav(CallbackData, prefix="nav"):
 class SettingCb(CallbackData, prefix="set"):
     field: str
 
+class DigestTimeCb(CallbackData, prefix="digest_t"):
+    action: str  # "minus" | "plus"
+
+class ReminderMinutesCb(CallbackData, prefix="remind_m"):
+    action: str  # "minus" | "plus"
+
 class MeetingCb(CallbackData, prefix="meet"):
     action: str
     value: str = ""

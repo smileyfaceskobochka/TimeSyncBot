@@ -4,7 +4,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CopyTextBu
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from tgbot.database.models import User, UserSettings, GroupChat
 from tgbot.config import config
-from tgbot.keyboards.callback_data import GroupSelectCb, ScheduleNav, SettingCb, AdminCallback, FreeRoomsDate, MeetingCb, TeacherNav, GroupChatCb, FeedbackCb
+from tgbot.keyboards.callback_data import GroupSelectCb, ScheduleNav, SettingCb, AdminCallback, FreeRoomsDate, MeetingCb, TeacherNav, GroupChatCb, FeedbackCb, DigestTimeCb, ReminderMinutesCb
 def is_admin(user_id: int) -> bool: return user_id in config.ADMIN_IDS
 def get_week_calendar_kb(group: str, base_date: date = None) -> InlineKeyboardMarkup:
     if base_date is None:
@@ -264,9 +264,22 @@ def get_user_settings_kb(settings: UserSettings) -> InlineKeyboardMarkup:
         [btn("🏢 Показывать аудитории", "show_building")],
         [btn("⏸️ Показывать окна", "show_windows")],
         [btn(f"🔔 Утреннее расписание ({daily_time_str})", "notify_daily")],
+        [
+            InlineKeyboardButton(text="−30 мин", callback_data=DigestTimeCb(action="minus").pack()),
+            InlineKeyboardButton(text=f"🕐 Время: {daily_time_str}", callback_data="noop"),
+            InlineKeyboardButton(text="+30 мин", callback_data=DigestTimeCb(action="plus").pack()),
+        ],
         [btn(f"⏰ Напоминание перед парой ({pre_min_str})", "notify_before_lesson")],
+        [
+            InlineKeyboardButton(text="−5 мин", callback_data=ReminderMinutesCb(action="minus").pack()),
+            InlineKeyboardButton(
+                text=f"⏱ Грань: {getattr(settings, 'notify_before_minutes', 15)} мин",
+                callback_data="noop",
+            ),
+            InlineKeyboardButton(text="+5 мин", callback_data=ReminderMinutesCb(action="plus").pack()),
+        ],
         [InlineKeyboardButton(text="🔎 Сменить группу", callback_data="search_start")],
-        [InlineKeyboardButton(text="« Главное меню", callback_data="cmd_start")]
+        [InlineKeyboardButton(text="« Главное меню", callback_data="cmd_start")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 def get_meeting_all_groups_kb(all_groups: list[str], selected_groups: list[str], page: int = 0) -> InlineKeyboardMarkup:
