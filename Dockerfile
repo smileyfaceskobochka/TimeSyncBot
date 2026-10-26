@@ -30,10 +30,8 @@ RUN uv sync --frozen --no-dev
 # Create data directories
 RUN mkdir -p /app/data/pdf /app/data/temp /app/logs
 
-# Health check (verify bot and API server are responding)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/api/v1/health || exit 1
-
+# Healthchecks are defined per-service in docker-compose.yml
+# (the bot client doesn't serve HTTP, so only the server gets one)
 # Entrypoint
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
 
