@@ -5,12 +5,12 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from tgbot.config import config
-from tgbot.database.repositories import DatabaseManager, UserRepository
-from tgbot.services.parser.site_to_pdf import main_downloader
-from tgbot.services.parser.pdf_parser import parse_schedule_files
-from tgbot.services.parser.occupancy_parser import update_occupancy
-from tgbot.services.parser.progress import ProgressReporter
+from core.config import config
+from server.database.repositories import DatabaseManager, UserRepository
+from server.services.parser.site_to_pdf import main_downloader
+from server.services.parser.pdf_parser import parse_schedule_files
+from server.services.parser.occupancy_parser import update_occupancy
+from server.services.parser.progress import ProgressReporter
 
 class ConsoleProgress:
     async def report(self, text: str, progress: float = None):
@@ -31,7 +31,7 @@ async def run_pipeline(db_manager: DatabaseManager = None, group_keywords: list[
     await user_repo.create_tables()
     
     # 1.5. Синхронизация списка групп с сайтом ВятГУ (обновляем общий список)
-    from tgbot.services.parser.site_to_pdf import sync_groups_list
+    from server.services.parser.site_to_pdf import sync_groups_list
     await progress.report("🔄 Updating university groups list...", 0.05)
     await sync_groups_list(engine=db_manager.engine, progress=progress)
 
@@ -57,7 +57,7 @@ async def cleanup_filesystem(weeks: int = 5):
     Deletes PDF files that are older than specified weeks.
     Also cleans up temporary files in data directory.
     """
-    from tgbot.config import config
+    from core.config import config
     
     pdf_dir = str(Path(config.DATA_DIR) / "pdf")
     temp_dir = str(Path(config.DATA_DIR) / "temp")

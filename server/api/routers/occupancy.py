@@ -6,11 +6,11 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from tgbot.api.dependencies import get_occupancy_repo, get_occupancy_service
-from tgbot.api.schemas import AvailablePairsResponse, BuildingsResponse, FreeRoomsResponse
-from tgbot.config import config
-from tgbot.database.repositories import OccupancyRepository
-from tgbot.services.services import OccupancyService
+from server.api.dependencies import get_occupancy_repo, get_occupancy_service
+from server.api.schemas import AvailablePairsResponse, BuildingsResponse, FreeRoomsResponse
+from core.config import config
+from server.database.repositories import OccupancyRepository
+from core.services import OccupancyService
 
 router = APIRouter(prefix="/occupancy", tags=["Occupancy"])
 

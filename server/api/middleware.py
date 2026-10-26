@@ -12,7 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from tgbot.config import config
+from core.config import config
 
 
 class SlidingWindowRateLimiter:
@@ -87,7 +87,7 @@ class SecurityAndRateLimitMiddleware(BaseHTTPMiddleware):
         configured_keys = config.API_KEYS
 
         if api_key:
-            if configured_keys and api_key not in configured_keys:
+            if configured_keys and api_key not in configured_keys and api_key != config.BOT_API_KEY:
                 return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     content={

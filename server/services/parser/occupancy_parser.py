@@ -12,10 +12,10 @@ from selectolax.parser import HTMLParser
 from sqlalchemy import select, create_engine
 from sqlalchemy.orm import Session
 
-from tgbot.config import config
-from tgbot.database.models import Occupancy, ProcessedFile
-from tgbot.services.parser.site_to_pdf import check_website_status
-from tgbot.services.parser.utils import calculate_hash
+from core.config import config
+from core.models import Occupancy, ProcessedFile
+from server.services.parser.site_to_pdf import check_website_status
+from server.services.parser.utils import calculate_hash
 
 # Constants (centralized in config)
 INDEX_URL = config.OCCUPANCY_URL

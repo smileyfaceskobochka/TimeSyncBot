@@ -2,7 +2,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, EphemeralMessageParameters
 from aiogram.filters import Command
 from tgbot.filters import AdminFilter
-from tgbot.database.repositories import UserRepository
+from tgbot.database.repositories import UserRepository, ParserSchedulerService
 from tgbot.keyboards.inline import get_admin_menu_kb, get_bot_settings_kb
 from tgbot.keyboards.callback_data import AdminCallback
 from tgbot.config import config
@@ -58,42 +58,23 @@ async def admin_toggle_btn(callback: CallbackQuery, callback_data: AdminCallback
     await callback.answer(f"Кнопка {'выключена' if new_val == '0' else 'включена'}")
 
 @admin_router.callback_query(F.data == "admin_sync_groups")
-async def admin_sync_groups(callback: CallbackQuery):
-    from tgbot.services.parser.site_to_pdf import sync_groups_list
-    from tgbot.services.parser.progress import ProgressReporter
-    
-    progress = ProgressReporter(callback.message)
-    await progress.report("⏳ Начало синхронизации списка групп...", 0.0)
-    
-    success = await sync_groups_list(progress=progress)
-    
-    if success:
-        await callback.message.edit_text("✅ Список групп успешно обновлен!", reply_markup=get_admin_menu_kb())
-    else:
-        from tgbot.services.parser.site_to_pdf import check_website_status
-        is_available, status_code, error_msg = await check_website_status()
-        if not is_available:
-            await callback.message.edit_text(
-                f"🌐 Сайт ВятГУ недоступен ({error_msg}).\n"
-                "Синхронизация невозможна. Попробуйте позже.",
-                reply_markup=get_admin_menu_kb()
-            )
+async def admin_sync_groups(callback: CallbackQuery, parser_scheduler: ParserSchedulerService):
+    await callback.message.edit_text("⏳ Запускаю синхронизацию расписания на сервере...", reply_markup=get_admin_menu_kb())
+    try:
+        ok = await parser_scheduler.sync_groups()
+        if ok:
+            await callback.message.edit_text("✅ Список групп и расписание успешно синхронизированы!", reply_markup=get_admin_menu_kb())
         else:
-            await callback.message.edit_text("❌ Ошибка при синхронизации.", reply_markup=get_admin_menu_kb())
+            await callback.message.edit_text("❌ Синхронизация не удалась. Попробуйте позже.", reply_markup=get_admin_menu_kb())
+    except Exception as e:
+        await callback.message.edit_text(f"❌ Ошибка синхронизации: <code>{e}</code>", reply_markup=get_admin_menu_kb())
     await callback.answer()
 
 @admin_router.callback_query(F.data == "admin_sync_occupancy")
-async def admin_sync_occupancy(callback: CallbackQuery):
-    from tgbot.services.parser.occupancy_parser import update_occupancy
-    from tgbot.services.parser.progress import ProgressReporter
-    from sqlalchemy import create_engine
-    
-    progress = ProgressReporter(callback.message)
-    await progress.report("⏳ Начало обновления занятости...", 0.0)
-    
-    engine = create_engine(f"sqlite:///{config.DB_NAME}")
+async def admin_sync_occupancy(callback: CallbackQuery, parser_scheduler: ParserSchedulerService):
+    await callback.message.edit_text("⏳ Запускаю обновление занятости аудиторий на сервере...", reply_markup=get_admin_menu_kb())
     try:
-        await update_occupancy(engine=engine, progress=progress)
+        ok = await parser_scheduler.sync_occupancy()
         await callback.message.edit_text("✅ Занятость аудиторий успешно обновлена!", reply_markup=get_admin_menu_kb())
     except Exception as e:
         await callback.message.edit_text(f"❌ Ошибка при обновлении занятости: {e}", reply_markup=get_admin_menu_kb())

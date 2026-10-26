@@ -5,9 +5,9 @@ Single responsibility: Querying university student groups.
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from tgbot.api.dependencies import get_schedule_repo
-from tgbot.api.schemas import GroupSearchResponse
-from tgbot.database.repositories import ScheduleRepository
+from server.api.dependencies import get_schedule_repo
+from server.api.schemas import GroupSearchResponse
+from server.database.repositories import ScheduleRepository
 
 router = APIRouter(prefix="/groups", tags=["Groups"])
 

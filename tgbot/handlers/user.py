@@ -15,8 +15,8 @@ from tgbot.database.repositories import (
     ScheduleRepository,
     AnalyticsRepository,
     OccupancyRepository,
+    ParserSchedulerService,
 )
-from tgbot.services.parser.runner import run_pipeline
 from tgbot.services.services import ScheduleService, format_week_schedule_expandable
 from tgbot.services.utils import parse_date
 from tgbot.states.states import RegState
@@ -349,6 +349,7 @@ async def process_group_search(
     schedule_repo: ScheduleRepository,
     state: FSMContext,
     analytics_repo: AnalyticsRepository,
+    parser_scheduler: ParserSchedulerService,
 ):
     await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     await analytics_repo.log_action(
@@ -363,22 +364,17 @@ async def process_group_search(
         # Auto-recovery: If DB is empty because startup sync failed, try to sync now
         tracked_count = await schedule_repo.get_tracked_groups_count()
         if tracked_count == 0:
-            from tgbot.services.parser.site_to_pdf import sync_groups_list
-            sync_msg = await message.answer("🔄 Загрузка списка групп с сайта ВятГУ, пожалуйста, подождите...")
-            sync_ok = await sync_groups_list() # Uses default config.DB_NAME
+            sync_msg = await message.answer("🔄 Загрузка списка групп на сервере, пожалуйста, подождите...")
+            try:
+                sync_ok = await parser_scheduler.sync_groups()
+            except Exception as e:
+                logging.error(f"Server group sync failed: {e}")
+                sync_ok = False
             await sync_msg.delete()
             if sync_ok:
                 fast_results = await schedule_repo.search_tracked_groups(message.text.strip())
 
         if not results and not fast_results:
-            # Проверяем, не связано ли это с недоступностью сайта
-            from tgbot.services.parser.site_to_pdf import check_website_status
-            is_available, status_code, error_msg = await check_website_status()
-            if not is_available:
-                return await message.answer(
-                    f"🌐 Сайт ВятГУ временно недоступен ({error_msg}).\n"
-                    "Поиск групп сейчас невозможен. Попробуйте позже."
-                )
             return await message.answer(
                 "⚠️ Группы не найдены. Попробуйте ввести название точнее (например: ИВТб)."
             )
@@ -430,6 +426,7 @@ async def change_group(
     schedule_repo: ScheduleRepository,
     analytics_repo: AnalyticsRepository,
     state: FSMContext,
+    parser_scheduler: ParserSchedulerService,
 ):
     group_name = callback_data.name
     await analytics_repo.log_action(
@@ -440,14 +437,11 @@ async def change_group(
     has_lessons = await schedule_repo.has_lessons_for_group(group_name)
     if not has_lessons:
         await schedule_repo.set_group_tracked(group_name, is_tracked=True)
-        from tgbot.services.parser.progress import ProgressReporter
-        progress = ProgressReporter(callback.message)
-        await progress.report(f"⏳ Расписание для <b>{group_name}</b> загружается с сайта ВятГУ...", 0.1)
+        loading_msg = await callback.message.edit_text(
+            f"⏳ Расписание для <b>{group_name}</b> загружается на сервере..."
+        )
         try:
-            from tgbot.services.parser.runner import run_pipeline
-            from tgbot.database.repositories import DatabaseManager
-            db_manager = DatabaseManager(config.DB_NAME)
-            await run_pipeline(db_manager=db_manager, group_keywords=[group_name], progress=progress)
+            await parser_scheduler.run_groups([group_name])
         except Exception as e:
             logging.error(f"Error fetching schedule on-demand for {group_name}: {e}")
             await callback.message.answer(f"⚠️ Не удалось загрузить расписание: {e}")
@@ -518,6 +512,7 @@ async def confirm_multi_parse(
     user_repo: UserRepository,
     schedule_repo: ScheduleRepository,
     state: FSMContext,
+    parser_scheduler: ParserSchedulerService,
 ):
     """
     Запуск пакетной загрузки для всех выбранных групп.
@@ -542,20 +537,12 @@ async def confirm_multi_parse(
     for group_name in selected_groups:
         await schedule_repo.set_group_tracked(group_name, is_tracked=True)
 
-    # 2. Инициализируем прогресс-репортер
-    from tgbot.services.parser.progress import ProgressReporter
-    progress = ProgressReporter(callback.message)
-
-    # 3. Запускаем пайплайн для списка групп
+    # 2. Запускаем пайплайн на сервере для списка групп
     num = len(selected_groups)
-    await progress.report(f"⏳ Начинаю загрузку расписания для {num} групп...", 0.0)
+    await callback.message.edit_text(f"⏳ Начинаю загрузку расписания для {num} групп на сервере...")
 
     try:
-        from tgbot.services.parser.runner import run_pipeline
-        from tgbot.database.repositories import DatabaseManager
-        db_manager = DatabaseManager(config.DB_NAME)
-        # Мы обновим run_pipeline чтобы он принимал список
-        await run_pipeline(db_manager=db_manager, group_keywords=selected_groups, progress=progress)
+        await parser_scheduler.run_groups(selected_groups)
 
         # 4. Если выбрана была только одна группа, установим её как основную
         user = await user_repo.get_user(callback.from_user.id)
@@ -590,6 +577,7 @@ async def parse_group_ondemand(
     user_repo: UserRepository,
     schedule_repo: ScheduleRepository, # FIX: use injected repo
     state: FSMContext,
+    parser_scheduler: ParserSchedulerService,
 ):
     # Одиночный парсинг теперь тоже может идти через тумблеры,
     # но если нажали конкретную кнопку "Загрузить его сейчас" из быстрого ответа,
@@ -609,16 +597,10 @@ async def parse_group_ondemand(
     group_name = callback_data.name
     await schedule_repo.set_group_tracked(group_name, is_tracked=True)
 
-    from tgbot.services.parser.progress import ProgressReporter
-    progress = ProgressReporter(callback.message)
-
-    await progress.report(f"⏳ Начинаю загрузку расписания для {group_name}...", 0.0)
+    await callback.message.edit_text(f"⏳ Начинаю загрузку расписания для {group_name} на сервере...")
 
     try:
-        from tgbot.services.parser.runner import run_pipeline
-        from tgbot.database.repositories import DatabaseManager
-        db_manager = DatabaseManager(config.DB_NAME)
-        await run_pipeline(db_manager=db_manager, group_keywords=[group_name], progress=progress)
+        await parser_scheduler.run_groups([group_name])
 
         user = await user_repo.get_user(callback.from_user.id)
         if not user:

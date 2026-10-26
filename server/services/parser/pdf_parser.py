@@ -10,9 +10,9 @@ import pymupdf as fitz
 from sqlalchemy import create_engine, delete
 from sqlalchemy.orm import Session
 
-from tgbot.config import config
-from tgbot.database.models import Lesson
-from tgbot.services.parser.utils import parse_lesson_details
+from core.config import config
+from core.models import Lesson
+from server.services.parser.utils import parse_lesson_details
 
 def process_pdf_sync(file_path, group_name):
     """

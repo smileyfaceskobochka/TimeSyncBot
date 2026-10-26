@@ -6,9 +6,9 @@ from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from tgbot.api.dependencies import get_schedule_repo
-from tgbot.api.schemas import DayScheduleDTO, LessonDTO, ScheduleResponse
-from tgbot.database.repositories import ScheduleRepository
+from server.api.dependencies import get_schedule_repo
+from server.api.schemas import DayScheduleDTO, LessonDTO, ScheduleResponse
+from server.database.repositories import ScheduleRepository
 
 router = APIRouter(prefix="/schedule", tags=["Schedule"])
 

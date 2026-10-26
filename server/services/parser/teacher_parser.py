@@ -11,9 +11,9 @@ from selectolax.parser import HTMLParser
 from sqlalchemy import create_engine, select, delete
 from sqlalchemy.orm import Session
 
-from tgbot.config import config
-from tgbot.database.models import Lesson, TeacherCurriculum
-from tgbot.services.parser.site_to_pdf import check_website_status
+from core.config import config
+from core.models import Lesson, TeacherCurriculum
+from server.services.parser.site_to_pdf import check_website_status
 
 TEACHER_URL = config.TEACHER_URL
 BASE_URL = config.VYATSU_BASE_URL

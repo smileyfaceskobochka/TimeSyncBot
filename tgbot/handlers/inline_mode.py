@@ -15,7 +15,8 @@ from aiogram.types import (
 
 from tgbot.database.repositories import ScheduleRepository, UserRepository
 from tgbot.services.services import ScheduleService, format_week_schedule_expandable
-from tgbot.handlers.teacher import fetch_teacher_lessons, _format_teacher_day
+from tgbot.handlers.teacher import _format_teacher_day
+from tgbot.client.gateway import TeacherGateway
 
 inline_router = Router()
 
@@ -27,7 +28,8 @@ async def handle_inline_query(
     inline_query: InlineQuery,
     schedule_repo: ScheduleRepository,
     user_repo: UserRepository,
-    service: ScheduleService
+    service: ScheduleService,
+    teacher: TeacherGateway,
 ):
     """
     Handles inline queries like:
@@ -177,12 +179,8 @@ async def handle_inline_query(
             break
         t_lessons = await schedule_repo.get_lessons_for_teacher(t_name)
         if not t_lessons:
-            from tgbot.services.parser.teacher_parser import teacher_mapping_manager
-            dict_lessons = await teacher_mapping_manager.fetch_teacher_lessons(t_name, today)
-            dept_name = teacher_mapping_manager.get_teacher_department(t_name)
+            dict_lessons = await teacher.get_lessons(t_name, today)
         else:
-            from tgbot.services.parser.teacher_parser import teacher_mapping_manager
-            dept_name = teacher_mapping_manager.get_teacher_department(t_name)
             dict_lessons = [{
                 "date": l.date,
                 "pair_number": l.pair_number,
@@ -195,6 +193,7 @@ async def handle_inline_query(
                 "groups": l.group_name,
                 "raw_info": l.raw_info,
             } for l in t_lessons]
+        dept_name = await teacher.get_department(t_name)
 
         # Сегодня
         text_today = _clip(_format_teacher_day(t_name, dict_lessons, today, dept_name=dept_name))
@@ -223,56 +222,28 @@ async def handle_inline_query(
             )
         )
 
-    # Если в базе преподаватель не найден и результатов мало — пробуем кэш и быстрый онлайн-поиск (до 1.5 сек)
+    # Если в базе преподаватель не найден и результатов мало — быстрый поиск на сервере (до 1.8 сек)
     if not found_teachers and len(query) >= 3 and len(results) < 8:
-        from tgbot.handlers.teacher import _teacher_lessons_cache
-        cached_matches = [
-            (name, data[1]) for name, data in _teacher_lessons_cache.items()
-            if query.lower() in name.lower()
-        ]
-        if cached_matches:
-            for teacher_name, t_lessons in cached_matches[:3]:
+        try:
+            matched_teachers = await asyncio.wait_for(teacher.search(query), timeout=1.8)
+            for teacher_name in matched_teachers[:3]:
                 if len(results) >= 8:
                     break
+                t_lessons = await teacher.get_lessons(teacher_name, today)
                 text_teach = _clip(_format_teacher_day(teacher_name, t_lessons, today))
                 results.append(
                     InlineQueryResultArticle(
-                        id=hashlib.md5(f"teach_cache_{teacher_name}_{today.isoformat()}".encode()).hexdigest(),
+                        id=hashlib.md5(f"teach_net_{teacher_name}_{today.isoformat()}".encode()).hexdigest(),
                         title=f"👨‍🏫 {teacher_name} — Сегодня",
-                        description=f"Расписание преподавателя {teacher_name} на сегодня (из кэша)",
+                        description=f"Расписание преподавателя {teacher_name} на сегодня",
                         input_message_content=InputTextMessageContent(
                             message_text=text_teach,
                             parse_mode="HTML"
                         )
                     )
                 )
-        else:
-            try:
-                teacher_lessons = await asyncio.wait_for(
-                    fetch_teacher_lessons(query), timeout=1.8
-                )
-                if teacher_lessons:
-                    by_teacher = {}
-                    for lesson in teacher_lessons:
-                        name = (lesson.get("teacher") or query).strip() or query
-                        by_teacher.setdefault(name, []).append(lesson)
-                    for teacher_name in sorted(by_teacher.keys())[:3]:
-                        if len(results) >= 8:
-                            break
-                        text_teach = _clip(_format_teacher_day(teacher_name, by_teacher[teacher_name], today))
-                        results.append(
-                            InlineQueryResultArticle(
-                                id=hashlib.md5(f"teach_net_{teacher_name}_{today.isoformat()}".encode()).hexdigest(),
-                                title=f"👨‍🏫 {teacher_name} — Сегодня",
-                                description=f"Расписание преподавателя {teacher_name} на сегодня",
-                                input_message_content=InputTextMessageContent(
-                                    message_text=text_teach,
-                                    parse_mode="HTML"
-                                )
-                            )
-                        )
-            except (asyncio.TimeoutError, Exception) as e:
-                logger.debug(f"Quick teacher network search skipped/timed out: {e}")
+        except Exception as e:
+            logger.debug(f"Quick teacher server search skipped/timed out: {e}")
 
     # 4. Никогда не отвечаем пустотой: иначе клиент показывает «нет результатов»
     # и кажется, что инлайн «не работает» (кейс @vyatsuts_bot Долженкова).

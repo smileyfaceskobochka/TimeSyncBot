@@ -6,10 +6,10 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
-from tgbot.api.dependencies import get_schedule_repo
-from tgbot.api.schemas import HealthResponse
-from tgbot.database.repositories import ScheduleRepository
-from tgbot.services.parser.teacher_parser import teacher_mapping_manager
+from server.api.dependencies import get_schedule_repo
+from server.api.schemas import HealthResponse
+from server.database.repositories import ScheduleRepository
+from server.services.parser.teacher_parser import teacher_mapping_manager
 
 router = APIRouter(tags=["System"])
 

@@ -2,20 +2,21 @@ import asyncio
 import logging
 import signal
 import sys
-from pathlib import Path
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from tgbot.services.parser_scheduler import ParserSchedulerService
-from tgbot.handlers.admin_parser_commands import admin_parser_router
-from tgbot.config import config
-from tgbot.services.logger import setup_logging
-from tgbot.database.repositories import (
+from tgbot.client.gateway import (
     UserRepository,
     ScheduleRepository,
     OccupancyRepository,
     AnalyticsRepository,
-    GroupChatRepository
+    GroupChatRepository,
+    ParserSchedulerService,
+    TeacherGateway,
 )
+from tgbot.notification_scheduler import NotificationSchedulerService
+from tgbot.handlers.admin_parser_commands import admin_parser_router
+from tgbot.config import config
+from tgbot.services.logger import setup_logging
 from tgbot.services.services import ScheduleService, OccupancyService
 from tgbot.handlers.meetings import meeting_router
 from tgbot.handlers.group_chat import group_chat_router
@@ -32,63 +33,45 @@ from tgbot.handlers.inline_mode import inline_router
 # Global reference for signal handler
 parser_scheduler = None
 
+
 def signal_handler(sig, frame):
     """Handle graceful shutdown on SIGTERM/SIGINT"""
     logging.info("⏹️ Received shutdown signal, gracefully shutting down...")
     if parser_scheduler:
-        parser_scheduler.stop()
+        asyncio.create_task(parser_scheduler.close())
     sys.exit(0)
+
 
 async def main():
     global parser_scheduler
-    
+
     setup_logging()
     logging.info("Starting bot...")
-    
+
     # Validate required environment variables
     if not config.BOT_TOKEN:
         raise ValueError("❌ BOT_TOKEN environment variable is required")
     if not config.ADMIN_IDS:
         raise ValueError("❌ ADMIN_IDS environment variable is required")
-    
-    # Create required directories
-    Path(config.DATA_DIR).mkdir(parents=True, exist_ok=True)
-    Path(config.DB_DIR).mkdir(parents=True, exist_ok=True)
-    Path(config.LOG_DIR).mkdir(parents=True, exist_ok=True)
-    logging.info(f"✓ Data directories created: {config.DATA_DIR}, {config.DB_DIR}, {config.LOG_DIR}")
 
-    from tgbot.database.repositories import DatabaseManager
-    db_manager = DatabaseManager(config.DB_NAME)
-    analytics_db_manager = DatabaseManager(config.ANALYTICS_DB_NAME)
+    # HTTP gateway to the TimeSync server (core service)
+    user_repo = UserRepository(base_url=config.SERVER_URL, api_key=config.BOT_API_KEY)
+    schedule_repo = ScheduleRepository(base_url=config.SERVER_URL, api_key=config.BOT_API_KEY)
+    occupancy_repo = OccupancyRepository(base_url=config.SERVER_URL, api_key=config.BOT_API_KEY)
+    analytics_repo = AnalyticsRepository(base_url=config.SERVER_URL, api_key=config.BOT_API_KEY)
+    group_chat_repo = GroupChatRepository(base_url=config.SERVER_URL, api_key=config.BOT_API_KEY)
+    teacher = TeacherGateway(base_url=config.SERVER_URL, api_key=config.BOT_API_KEY)
 
     bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher()
 
-    user_repo = UserRepository(db_manager)
-    schedule_repo = ScheduleRepository(db_manager)
-    occupancy_repo = OccupancyRepository(db_manager)
-    analytics_repo = AnalyticsRepository(analytics_db_manager)
-    group_chat_repo = GroupChatRepository(db_manager)
-
-    await user_repo.create_tables()
-    await analytics_repo.create_tables()
-    await group_chat_repo.create_tables()
-    logging.info("✓ Database tables initialized")
-    
-    # === STARTUP PROTECTION: ENSURE GROUPS LIST IS POPULATED ===
-    tracked_count = await schedule_repo.get_tracked_groups_count()
-    if tracked_count == 0:
-        logging.info("🚀 First run detected. Syncing university groups list...")
-        from tgbot.services.parser.site_to_pdf import sync_groups_list
-        sync_ok = await sync_groups_list(db_manager.engine)
-        if not sync_ok:
-            logging.warning(
-                "⚠️ VyatSU website is currently unreachable. "
-                "Bot will start with cached data. Group search will be limited."
-            )
-
-    schedule_service = ScheduleService()
-    occupancy_service = OccupancyService(occupancy_repo)
+    parser_scheduler = NotificationSchedulerService(
+        schedule_repo=schedule_repo,
+        analytics_repo=analytics_repo,
+        group_chat_repo=group_chat_repo,
+        user_repo=user_repo,
+        bot=bot,
+    )
 
     dp.include_routers(
         group_chat_router,
@@ -105,36 +88,11 @@ async def main():
         inline_router
     )
 
-    parser_scheduler = ParserSchedulerService(
-        db_manager=db_manager,
-        schedule_repo=schedule_repo,
-        analytics_repo=analytics_repo,
-        group_chat_repo=group_chat_repo,
-        user_repo=user_repo,
-        bot=bot
-    )
     parser_scheduler.start()
-    
-    # Register signal handlers for graceful shutdown
+
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     logging.info("✓ Signal handlers registered")
-
-    # Start Android Widget API Server (FastAPI + Uvicorn)
-    import uvicorn
-    from tgbot.api.server import create_app
-    api_app = create_app(db_manager)
-    uvicorn_config = uvicorn.Config(
-        api_app,
-        host=config.API_HOST,
-        port=config.API_PORT,
-        log_level="info",
-        access_log=False,
-    )
-    uvicorn_server = uvicorn.Server(uvicorn_config)
-    uvicorn_server.install_signal_handlers = lambda: None
-    api_task = asyncio.create_task(uvicorn_server.serve())
-    logging.info(f"🌐 FastAPI server started on http://{config.API_HOST}:{config.API_PORT} (Docs: http://{config.API_HOST}:{config.API_PORT}/api/v1/docs)")
 
     # Setup contextual command menus and bot descriptions
     from tgbot.services.bot_commands import setup_bot_metadata
@@ -149,19 +107,24 @@ async def main():
             occupancy_repo=occupancy_repo,
             analytics_repo=analytics_repo,
             group_chat_repo=group_chat_repo,
-            service=schedule_service,
+            service=ScheduleService(),
             parser_scheduler=parser_scheduler,
-            occupancy_service=occupancy_service
+            occupancy_service=OccupancyService(occupancy_repo),
+            teacher=teacher,
         )
     except Exception as e:
         logging.error(f"❌ Bot error: {e}", exc_info=True)
         raise
     finally:
-        logging.info("Shutting down bot and API...")
+        logging.info("Shutting down bot...")
+        await user_repo.close()
+        await schedule_repo.close()
+        await occupancy_repo.close()
+        await analytics_repo.close()
+        await group_chat_repo.close()
+        await teacher.close()
         if parser_scheduler:
             parser_scheduler.stop()
-        uvicorn_server.should_exit = True
-        await api_task
         await bot.session.close()
         logging.info("Bot stopped successfully.")
 

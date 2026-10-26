@@ -1,1 +1,1 @@
-"""Service layer for business logic and background tasks."""
+"""TimeSyncBot client-side services."""

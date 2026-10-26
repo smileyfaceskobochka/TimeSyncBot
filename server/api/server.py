@@ -15,6 +15,7 @@ Routers mounted under /api/v1:
     /teachers                     — Teacher search, schedules, and curriculum
     /occupancy                    — Campus buildings and free classrooms
     /meetings                     — Inter-group mutual free windows
+    /internal                     — Internal service API (bot client <-> server, X-API-Key guarded)
 """
 import logging
 from typing import Optional
@@ -24,22 +25,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from tgbot.api.middleware import (
+from server.api.middleware import (
     SecurityAndRateLimitMiddleware,
     global_exception_handler,
     http_exception_handler,
     validation_exception_handler,
 )
-from tgbot.api.routers import (
+from server.api.routers import (
     groups,
+    internal,
     meetings,
     occupancy,
     schedule,
     system,
     teachers,
 )
-from tgbot.api.schemas import ErrorResponse, HealthResponse
-from tgbot.database.repositories import DatabaseManager
+from server.api.schemas import ErrorResponse, HealthResponse
+from server.database.repositories import DatabaseManager
 
 
 def create_app(db: Optional[DatabaseManager] = None) -> FastAPI:
@@ -91,6 +93,7 @@ def create_app(db: Optional[DatabaseManager] = None) -> FastAPI:
     app.include_router(teachers.router, prefix=v1_prefix)
     app.include_router(occupancy.router, prefix=v1_prefix)
     app.include_router(meetings.router, prefix=v1_prefix)
+    app.include_router(internal.router, prefix="/api/v1/internal")
 
     # 5. Legacy aliases for external probes
     @app.get("/api/health", response_model=HealthResponse, include_in_schema=False)

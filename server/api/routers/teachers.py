@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query
-from tgbot.api.schemas import (
+from server.api.schemas import (
     CurriculumRecordDTO,
     TeacherCurriculumResponse,
     TeacherDayScheduleDTO,
@@ -14,7 +14,7 @@ from tgbot.api.schemas import (
     TeacherScheduleResponse,
     TeacherSearchResponse,
 )
-from tgbot.services.parser.teacher_parser import teacher_mapping_manager
+from server.services.parser.teacher_parser import teacher_mapping_manager
 
 router = APIRouter(prefix="/teachers", tags=["Teachers"])
 

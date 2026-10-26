@@ -1,11 +1,9 @@
 import asyncio
 import hashlib
 import logging
-import time
 from datetime import date, datetime, timedelta
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 
-import aiohttp
 from aiogram import Router, F
 from aiogram.enums import ChatAction
 from aiogram.types import (
@@ -33,24 +31,9 @@ from tgbot.keyboards.inline import (
     get_teacher_curriculum_kb,
     get_main_menu,
 )
-from tgbot.services.parser.teacher_parser import (
-    get_teacher_navigation_data,
-    find_active_teacher_reports,
-    parse_teacher_html_report,
-    teacher_mapping_manager,
-)
-from tgbot.services.parser.progress import ProgressReporter
+from tgbot.client.gateway import TeacherGateway
 
 teacher_router = Router()
-
-# Cache for navigation data (6 hours TTL)
-_nav_cache = None
-_nav_cache_timestamp = 0.0
-NAV_CACHE_TTL = 6 * 3600
-
-# Cache for teacher lessons by full name: teacher_name -> (timestamp, List[dict])
-_teacher_lessons_cache: Dict[str, Tuple[float, List[dict]]] = {}
-TEACHER_CACHE_TTL = 3600  # 1 hour
 
 # Registry for short IDs to avoid Telegram 64-byte callback_data overflow
 _teacher_id_registry: Dict[str, str] = {}  # id -> name
@@ -81,25 +64,6 @@ def resolve_teacher(t_id: str, user: Optional[User] = None) -> Optional[str]:
             if get_teacher_id(t) == t_id:
                 return t
     return None
-
-
-async def get_cached_nav():
-    global _nav_cache, _nav_cache_timestamp
-    now = time.time()
-    if _nav_cache is None or (now - _nav_cache_timestamp) > NAV_CACHE_TTL:
-        fresh_data = await get_teacher_navigation_data()
-        if fresh_data:
-            _nav_cache = fresh_data
-            _nav_cache_timestamp = now
-    return _nav_cache
-
-
-async def fetch_teacher_lessons(teacher_name: str, target_date: Optional[date] = None) -> List[dict]:
-    """Fetches and deduplicates all lessons for a teacher using dynamic curriculum mapping."""
-    lessons = await teacher_mapping_manager.fetch_teacher_lessons(teacher_name, target_date)
-    get_teacher_id(teacher_name)
-    _teacher_lessons_cache[teacher_name] = (time.time(), lessons)
-    return lessons
 
 
 # ================= СТАРТ ПОИСКА ПРЕПОДАВАТЕЛЯ =================
@@ -148,20 +112,10 @@ async def teacher_search_surname(message: Message, state: FSMContext, user_repo:
         return await message.answer("⚠️ Введите хотя бы 3 буквы фамилии для поиска.")
 
     await message.bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-    progress = ProgressReporter(message)
 
     try:
-        # 1. Если карта еще не построена — выполняем динамическую инициализацию (после первого поиска)
-        if not teacher_mapping_manager.is_mapped():
-            await progress.report(f"⏳ Первая инициализация карты преподавателей и учебных планов...", 0.15)
-            ok = await teacher_mapping_manager.ensure_mapping(progress=progress)
-            if not ok:
-                return await message.answer("❌ Не удалось получить данные о кафедрах. Попробуйте позже.")
-        else:
-            await progress.report(f"🔎 Ищу преподавателя <b>{query}</b>...", 0.2)
-
-        # 2. Ищем преподавателя в динамической карте
-        matched_teachers = teacher_mapping_manager.search_teachers(query)
+        # 1. Ищем преподавателя на сервере
+        matched_teachers = await teacher.search(query)
 
         if not matched_teachers:
             builder = InlineKeyboardBuilder()
@@ -191,12 +145,12 @@ async def teacher_search_surname(message: Message, state: FSMContext, user_repo:
         teacher_id = get_teacher_id(single_name)
         today = date.today()
 
-        lessons = await teacher_mapping_manager.fetch_teacher_lessons(single_name, today)
+        lessons = await teacher.get_lessons(single_name, today)
         user = await user_repo.get_user(message.from_user.id)
         is_fav = bool(user and single_name in user.favorite_teachers)
 
-        dept_names = teacher_mapping_manager.get_teacher_departments(single_name) or [teacher_mapping_manager.get_teacher_department(single_name)]
-        rep = teacher_mapping_manager.get_teacher_report_for_date(single_name, today)
+        dept_names = (await teacher.get_departments(single_name)) or [await teacher.get_department(single_name)]
+        rep = await teacher.get_report(single_name, today)
         html_url = rep.get("html_url") if rep else None
         xml_url = rep.get("xml_url") if rep else None
 
@@ -232,12 +186,12 @@ async def teacher_view_selected(
     teacher_id = get_teacher_id(teacher_name)
     today = date.today()
 
-    lessons = await teacher_mapping_manager.fetch_teacher_lessons(teacher_name, today)
+    lessons = await teacher.get_lessons(teacher_name, today)
     user = await user_repo.get_user(callback.from_user.id)
     is_fav = bool(user and teacher_name in user.favorite_teachers)
 
-    dept_names = teacher_mapping_manager.get_teacher_departments(teacher_name) or [teacher_mapping_manager.get_teacher_department(teacher_name)]
-    rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, today)
+    dept_names = (await teacher.get_departments(teacher_name)) or [await teacher.get_department(teacher_name)]
+    rep = await teacher.get_report(teacher_name, today)
     html_url = rep.get("html_url") if rep else None
     xml_url = rep.get("xml_url") if rep else None
 
@@ -276,11 +230,11 @@ async def teacher_nav_day(
     except (ValueError, TypeError):
         target_date = date.today()
 
-    lessons = await teacher_mapping_manager.fetch_teacher_lessons(teacher_name, target_date)
+    lessons = await teacher.get_lessons(teacher_name, target_date)
     is_fav = bool(user and teacher_name in user.favorite_teachers)
 
-    dept_names = teacher_mapping_manager.get_teacher_departments(teacher_name) or [teacher_mapping_manager.get_teacher_department(teacher_name)]
-    rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, target_date)
+    dept_names = (await teacher.get_departments(teacher_name)) or [await teacher.get_department(teacher_name)]
+    rep = await teacher.get_report(teacher_name, target_date)
     html_url = rep.get("html_url") if rep else None
     xml_url = rep.get("xml_url") if rep else None
 
@@ -333,9 +287,9 @@ async def teacher_nav_week(
     except (ValueError, TypeError):
         target_date = date.today()
 
-    lessons = await teacher_mapping_manager.fetch_teacher_lessons(teacher_name, target_date)
-    dept_names = teacher_mapping_manager.get_teacher_departments(teacher_name) or [teacher_mapping_manager.get_teacher_department(teacher_name)]
-    rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, target_date)
+    lessons = await teacher.get_lessons(teacher_name, target_date)
+    dept_names = (await teacher.get_departments(teacher_name)) or [await teacher.get_department(teacher_name)]
+    rep = await teacher.get_report(teacher_name, target_date)
     html_url = rep.get("html_url") if rep else None
     xml_url = rep.get("xml_url") if rep else None
 
@@ -386,8 +340,8 @@ async def teacher_nav_curriculum(
     except (ValueError, TypeError):
         current_date = date.today()
 
-    curriculum = teacher_mapping_manager.get_teacher_curriculum(teacher_name)
-    dept_names = teacher_mapping_manager.get_teacher_departments(teacher_name)
+    curriculum = await teacher.get_curriculum(teacher_name)
+    dept_names = await teacher.get_departments(teacher_name)
     dept_header = f"🏛 <b>Кафедры:</b> {', '.join(dept_names)}" if len(dept_names) > 1 else (f"🏛 <b>Кафедра:</b> {dept_names[0]}" if dept_names else "")
 
     lines = [
@@ -500,7 +454,7 @@ async def teacher_fav_toggle(
     except (ValueError, TypeError):
         current_date = date.today()
 
-    rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, current_date)
+    rep = await teacher.get_report(teacher_name, current_date)
     html_url = rep.get("html_url") if rep else None
     xml_url = rep.get("xml_url") if rep else None
 
@@ -525,11 +479,11 @@ async def teacher_fav_open(
 
     await callback.answer("Загружаю расписание...")
     today = date.today()
-    lessons = await teacher_mapping_manager.fetch_teacher_lessons(teacher_name, today)
+    lessons = await teacher.get_lessons(teacher_name, today)
 
     is_fav = bool(user and teacher_name in user.favorite_teachers)
-    dept_name = teacher_mapping_manager.get_teacher_department(teacher_name)
-    rep = teacher_mapping_manager.get_teacher_report_for_date(teacher_name, today)
+    dept_name = await teacher.get_department(teacher_name)
+    rep = await teacher.get_report(teacher_name, today)
     html_url = rep.get("html_url") if rep else None
     xml_url = rep.get("xml_url") if rep else None
 

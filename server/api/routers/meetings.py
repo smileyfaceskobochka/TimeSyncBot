@@ -6,10 +6,10 @@ from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from tgbot.api.dependencies import get_schedule_repo
-from tgbot.api.schemas import CommonFreeSlotsResponse, FreeSlotDTO
-from tgbot.config import config
-from tgbot.database.repositories import ScheduleRepository
+from server.api.dependencies import get_schedule_repo
+from server.api.schemas import CommonFreeSlotsResponse, FreeSlotDTO
+from core.config import config
+from server.database.repositories import ScheduleRepository
 
 router = APIRouter(prefix="/meetings", tags=["Meetings"])
 

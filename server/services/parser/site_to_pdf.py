@@ -13,11 +13,11 @@ from selectolax.parser import HTMLParser
 from sqlalchemy import select, update, create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
-from tgbot.config import config
-from tgbot.services.parser.progress import ProgressReporter
-from tgbot.services.parser.utils import calculate_hash
-from tgbot.database.models import TrackedGroup, ProcessedFile
-from tgbot.database.repositories import DatabaseManager
+from core.config import config
+from server.services.parser.progress import ProgressReporter
+from server.services.parser.utils import calculate_hash
+from core.models import TrackedGroup, ProcessedFile
+from server.database.repositories import DatabaseManager
 
 # Константы (centralized in config)
 SCHEDULE_URL = config.SCHEDULE_URL
