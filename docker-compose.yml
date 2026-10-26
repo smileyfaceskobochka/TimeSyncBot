@@ -1,60 +1,107 @@
 services:
-  timesyncbot:
+  # ─── Core server: owns the database, parser and internal REST API ───
+  timesync-server:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: timesyncbot
+    image: timesync:latest
+    container_name: timesync-server
     restart: unless-stopped
-    
+    command: ["python", "server/main.py"]
+
     environment:
-      BOT_TOKEN: ${BOT_TOKEN}
-      ADMIN_IDS: ${ADMIN_IDS}
+      APP_ROLE: server
+      BOT_API_KEY: ${BOT_API_KEY}
+      API_KEYS: ${API_KEYS:-}
       DATA_DIR: /app/data
       DB_DIR: /app/data
       LOG_DIR: /app/logs
       API_HOST: 0.0.0.0
       API_PORT: ${API_PORT:-8000}
-    
+      TZ: ${TZ:-Europe/Moscow}
+
     # Host networking: bridge/veth unavailable in this environment.
     # API is served directly on the host port (API_PORT).
     network_mode: host
 
     volumes:
-      # Persist data between restarts
-      - timesyncbot_data:/app/data
-      - timesyncbot_logs:/app/logs
-    
-    # Resource limits
+      - timesync_data:/app/data
+      - timesync_logs:/app/logs
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${API_PORT:-8000}/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+
+  # ─── Bot client: Telegram polling, talks to the server over HTTP ───
+  timesync-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: timesync:latest
+    container_name: timesync-bot
+    restart: unless-stopped
+    command: ["python", "main.py"]
+    depends_on:
+      timesync-server:
+        condition: service_healthy
+
+    environment:
+      APP_ROLE: bot
+      BOT_TOKEN: ${BOT_TOKEN}
+      ADMIN_IDS: ${ADMIN_IDS}
+      BOT_API_KEY: ${BOT_API_KEY}
+      SERVER_URL: ${SERVER_URL:-http://localhost:8000}
+      DATA_DIR: /app/data
+      DB_DIR: /app/data
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Europe/Moscow}
+
+    network_mode: host
+
+    volumes:
+      - timesync_logs:/app/logs
+
     deploy:
       resources:
         limits:
           cpus: '1'
           memory: 512M
         reservations:
-          cpus: '0.5'
-          memory: 256M
-    
-    # Logging
+          cpus: '0.25'
+          memory: 128M
+
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-    
-    # Health check
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    
-    # Signal handling
+
     stop_signal: SIGTERM
     stop_grace_period: 30s
 
 volumes:
-  timesyncbot_data:
+  timesync_data:
     driver: local
-  timesyncbot_logs:
+  timesync_logs:
     driver: local

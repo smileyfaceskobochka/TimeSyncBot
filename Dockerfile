@@ -1,4 +1,4 @@
-# TimeSyncBot Dockerfile
+# TimeSync Dockerfile (single image, two roles: server + bot)
 FROM python:3.11-slim
 
 # Install uv from official image
@@ -13,7 +13,7 @@ ENV PYTHONUNBUFFERED=1 \
     TZ=Europe/Moscow \
     PATH="/app/.venv/bin:$PATH"
 
-# Install system dependencies
+# Install system dependencies (curl used by healthchecks)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     procps \

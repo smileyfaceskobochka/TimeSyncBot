@@ -75,15 +75,32 @@ BOT_TOKEN=1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ
 # Telegram ID администраторов через запятую (обязательно)
 ADMIN_IDS=123456789
 
-# Часовой пояс (по умолчанию Europe/Moscow)
+# Общий секрет внутреннего API клиент<->сервер (обязательно)
+# Сгенерировать: python -c "import secrets; print(secrets.token_hex(24))"
+BOT_API_KEY=<generated_secret>
+
+# Часовой пояс (по умолчанию Europe/Moscow).
+# Используется для расписания, дайджестов и всех задач парсера.
 TZ=Europe/Moscow
 ```
 
 ---
 
+### Архитектура
+
+Проект разделён на **сервер** (ядро) и **клиент бота**:
+
+| Компонент | Что делает | Точка входа |
+|---|---|---|
+| `server/` | Владеет БД (SQLite), парсером ВятГУ, планировщиками (парсер 06:50, рассылка Occupancy каждые 4ч, обслуживание). Отдаёт публичный REST `/api/v1` (Android-виджет) и внутренний `/api/v1/internal` (бот-клиент, X-API-Key) | `python server/main.py` |
+| `tgbot/` | Клиент Telegram: aiogram 3, ротеры, клавиатуры. Не трогает БД/парсер напрямую — только HTTP-шлюз `tgbot/client/gateway.py` | `python main.py` |
+| `core/` | Общий слой: SQLModel-модели, сервисы форматирования, единая конфигурация с таймзоной | — |
+
+---
+
 ### Вариант А: Запуск в Docker Compose (Рекомендуется для продакшена)
 
-Сборка и запуск контейнера в фоновом режиме:
+Один образ, две роли (`APP_ROLE=server` / `APP_ROLE=bot`):
 
 ```bash
 docker compose up -d --build
@@ -91,7 +108,8 @@ docker compose up -d --build
 
 Просмотр логов:
 ```bash
-docker compose logs -f timesyncbot
+docker compose logs -f timesync-server
+docker compose logs -f timesync-bot
 ```
 
 Остановка:
@@ -111,7 +129,11 @@ docker compose down
    ```bash
    uv sync
    ```
-3. Запустите бота:
+3. Запустите сервер (терминал 1):
+   ```bash
+   uv run python server/main.py
+   ```
+4. Запустите бота (терминал 2):
    ```bash
    uv run python main.py
    ```
@@ -152,33 +174,54 @@ docker compose down
 
 ```text
 TimeSyncBot/
-├── main.py                     # Точка входа: инициализация БД, роутеров, планировщика и API
+├── main.py                     # Точка входа бота-клиента: aiogram, gateway, уведомительный планировщик
 ├── pyproject.toml              # Метаданные проекта и зависимости (PEP 621)
 ├── uv.lock                     # Зафиксированные версии зависимостей uv
-├── Dockerfile                  # Оптимизированный образ на python:3.11-slim с uv
-├── docker-compose.yml          # Конфигурация запуска с томами для данных и логов
+├── Dockerfile                  # Один образ, две роли (server / bot), python:3.11-slim + uv
+├── docker-compose.yml          # Сервисы timesync-server и timesync-bot
 ├── .env.example                # Шаблон переменных окружения
-└── tgbot/
-    ├── api/                    # REST API сервер (aiohttp) для Android-виджета
-    ├── config.py               # Загрузка настроек и тайм-слотов пар
-    ├── database/               # Модели SQLModel и асинхронные репозитории
-    │   ├── models.py
-    │   └── repositories.py
+├── server/                     # ── Ядро-сервер (владеет БД и парсером) ──
+│   ├── main.py                 # Точка входа сервера: FastAPI + планировщики
+│   ├── scheduler.py            # APScheduler: парсер 06:50, sync 05:00, maintenance, occupancy
+│   ├── api/                    # REST API (FastAPI)
+│   │   ├── server.py           # App factory, роутеры /api/v1
+│   │   ├── dependencies.py     # DI + X-API-Key верификация внутреннего API
+│   │   ├── routers/
+│   │   │   ├── system.py       # /health
+│   │   │   ├── groups.py       # Каталог групп
+│   │   │   ├── schedule.py     # Расписание (Android-виджет)
+│   │   │   ├── teachers.py     # Преподаватели
+│   │   │   ├── occupancy.py    # Занятость аудиторий
+│   │   │   ├── meetings.py     # /api/v1/meetings/free-slots
+│   │   │   └── internal.py     # /api/v1/internal — внутренний API бота (X-API-Key)
+│   │   └── schemas.py          # Pydantic-схемы ответов
+│   ├── database/
+│   │   └── repositories.py     # SQLModel-репозитории (только сервер их вызывает)
+│   └── services/parser/        # Загрузка и парсинг PDF/HTML с сайта ВятГУ
+├── core/                       # ── Общий слой (модели, сервисы, конфиг) ──
+│   ├── config.py               # Единая настройка: TZ (zoneinfo), SERVER_URL, BOT_API_KEY
+│   ├── models.py               # SQLModel-модели (User, Lesson, GroupChat, ...)
+│   └── services.py             # Форматирование расписания, OccupancyService
+└── tgbot/                      # ── Клиент Telegram ──
+    ├── client/
+    │   └── gateway.py          # HTTP-шлюз к /api/v1/internal (репозитории как раньше)
+    ├── notification_scheduler.py # Личные дайджесты, рассылка чатам, алерты перед парами (tz-aware)
+    ├── config.py               # Шим настроек (реэкспорт core.config) + тайм-слоты пар
+    ├── database/
+    │   ├── models.py           # Шим: реэкспорт core.models
+    │   └── repositories.py     # Шим: реэкспорт gateway-классов
     ├── handlers/               # Обработчики событий aiogram 3
     │   ├── user.py             # Личное меню и регистрация
     │   ├── schedule.py         # Вывод расписания
     │   ├── group_chat.py       # Групповые чаты и топики
-    │   ├── teacher.py          # Поиск преподавателей
+    │   ├── teacher.py          # Поиск преподавателей (через TeacherGateway)
     │   ├── free_rooms.py       # Поиск аудиторий
     │   ├── meetings.py         # Совместные окна (/meet)
     │   ├── favorites.py        # Избранные группы
     │   ├── settings.py         # Настройки отображения
-    │   └── admin.py            # Админские команды
+    │   └── admin*.py           # Админские команды (парсер управляется через сервер)
     ├── keyboards/              # Inline и Reply клавиатуры
-    ├── services/               # Бизнес-логика, парсеры и фоновые задачи
-    │   ├── parser/             # Загрузка и парсинг PDF с сайта ВятГУ
-    │   ├── parser_scheduler.py # APScheduler: рассылки и авто-синхронизация
-    │   └── services.py         # Форматирование расписания и расчёт свободных слотов
+    ├── services/services.py    # Шим: реэкспорт core.services (ScheduleService, ...)
     └── states/                 # FSM-состояния пользователей
 ```
 
@@ -186,7 +229,9 @@ TimeSyncBot/
 
 ## 🛡️ Безопасность и надёжность
 
-- **Graceful Shutdown**: обработка `SIGTERM` и `SIGINT` с корректной остановкой планировщика задач и закрытием соединений aiohttp.
+- **Разделение сервер/клиент**: бот не имеет доступа к БД и парсеру — только через внутренний API `/api/v1/internal`, защищённый общим секретом `BOT_API_KEY` (заголовок `X-API-Key`).
+- **Graceful Shutdown**: обработка `SIGTERM` и `SIGINT` с корректной остановкой планировщиков и закрытием HTTP-соединений.
 - **Изоляция данных**: директории `data/` и `logs/` сохраняются через Docker Volumes и не стираются при перезапуске.
-- **Самовосстановление**: при недоступности внешнего сайта ВятГУ бот стартует на локальном кэше и повторяет попытки в фоне.
+- **Самовосстановление**: при недоступности внешнего сайта ВятГУ сервер стартует на локальном кэше и повторяет попытки в фоне.
+- **Осознание таймзоны**: все расписания, дайджесты и cron-задачи работают через `zoneinfo` (TZ), что исправляет баг с дайджестом «в районе 00:00».
 - **Автоматическая миграция БД**: SQLite таблицы безопасно расширяются новыми колонками без потери существующих данных пользователей.

@@ -11,7 +11,6 @@ import sys
 from pathlib import Path
 
 import uvicorn
-from aiogram import Bot
 
 from core.config import config
 from tgbot.services.logger import setup_logging
