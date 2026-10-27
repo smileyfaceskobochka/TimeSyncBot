@@ -26,6 +26,19 @@ router = APIRouter(
 
 
 # ================= USERS =================
+@router.get("/users/with-group")
+async def get_all_users_with_group_internal(db=Depends(get_db)):
+    repo: UserRepository = UserRepository(db)
+    users = await repo.get_all_users_with_group()
+    return [u.model_dump(mode="json") for u in users]
+
+
+@router.get("/users/by-group/{group_name}")
+async def get_users_by_group_internal(group_name: str, db=Depends(get_db)):
+    repo: UserRepository = UserRepository(db)
+    return await repo.get_users_by_group(group_name)
+
+
 @router.get("/users/{telegram_id}")
 async def get_user_internal(telegram_id: int, db=Depends(get_db)):
     repo: UserRepository = UserRepository(db)
@@ -43,20 +56,6 @@ async def upsert_user_internal(telegram_id: int, user_body: User, db=Depends(get
     user = User(**payload)
     await repo.upsert_user(user)
     return {"ok": True}
-
-
-@router.get("/users/with-group")
-async def get_all_users_with_group_internal(db=Depends(get_db)):
-    repo: UserRepository = UserRepository(db)
-    users = await repo.get_all_users_with_group()
-    return [u.model_dump(mode="json") for u in users]
-
-
-@router.get("/users/by-group/{group_name}")
-async def get_users_by_group_internal(group_name: str, db=Depends(get_db)):
-    repo: UserRepository = UserRepository(db)
-    users = await repo.get_users_by_group(group_name)
-    return [u.model_dump(mode="json") for u in users]
 
 
 @router.post("/users/{telegram_id}/settings/{field}")
@@ -231,6 +230,18 @@ async def log_action_internal(body: dict, db=Depends(get_db)):
 
 
 # ================= GROUP CHATS =================
+@router.get("/group-chats/for-time")
+async def get_chats_for_time_internal(time: str = Query(..., alias="time"), db=Depends(get_db)):
+    repo: GroupChatRepository = GroupChatRepository(db)
+    return [c.model_dump(mode="json") for c in await repo.get_chats_for_time(time)]
+
+
+@router.get("/group-chats/active")
+async def get_all_active_chats_internal(db=Depends(get_db)):
+    repo: GroupChatRepository = GroupChatRepository(db)
+    return [c.model_dump(mode="json") for c in await repo.get_all_active_chats()]
+
+
 @router.get("/group-chats/{chat_id}")
 async def get_chat_internal(chat_id: int, db=Depends(get_db)):
     repo: GroupChatRepository = GroupChatRepository(db)
@@ -246,18 +257,6 @@ async def upsert_chat_internal(chat_id: int, chat_body: dict, db=Depends(get_db)
     chat = GroupChat(**{**chat_body, "chat_id": chat_id})
     await repo.upsert_chat(chat)
     return {"ok": True}
-
-
-@router.get("/group-chats/for-time")
-async def get_chats_for_time_internal(time: str = Query(..., alias="time"), db=Depends(get_db)):
-    repo: GroupChatRepository = GroupChatRepository(db)
-    return [c.model_dump(mode="json") for c in await repo.get_chats_for_time(time)]
-
-
-@router.get("/group-chats/active")
-async def get_all_active_chats_internal(db=Depends(get_db)):
-    repo: GroupChatRepository = GroupChatRepository(db)
-    return [c.model_dump(mode="json") for c in await repo.get_all_active_chats()]
 
 
 @router.delete("/group-chats/{chat_id}")
